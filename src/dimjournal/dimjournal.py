@@ -42,7 +42,16 @@ class Constants:
     mj_download_image_js = """var callback=arguments[arguments.length-1];function getDataUri(e,n){var a=new XMLHttpRequest;a.onload=function(){var e=new FileReader;e.onloadend=function(){n(e.result)},e.readAsDataURL(a.response)},a.open("GET",e),a.responseType="blob",a.send()}getDataUri(document.querySelector("img").src,function(e){callback(e)});"""
 
 
-def prev_day(date_string: str):
+def prev_day(date_string: str) -> str:
+    """
+    Calculate the date 90 days before the given date.
+
+    Args:
+        date_string (str): The date string in the format "%Y-%m-%d %H:%M:%S.%f".
+
+    Returns:
+        str: The date string 90 days before the given date.
+    """
     date_obj = dt.datetime.strptime(date_string, Constants.date_format)
     prev_day_obj = date_obj - dt.timedelta(days=90)
     prev_day_string = prev_day_obj.strftime(Constants.date_format)
