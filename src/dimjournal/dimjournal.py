@@ -44,6 +44,15 @@ class URLsAndConstants:
 
 def get_date_ninety_days_prior(date_string: str) -> str:
     """
+    Get the date 90 days prior to the given date.
+
+    Args:
+        date_string (str): The date string in the format "%Y-%m-%d %H:%M:%S.%f".
+
+    Returns:
+        str: The date string 90 days prior to the given date.
+    """
+    """
     Calculate the date 90 days before the given date.
 
     Args:
@@ -67,8 +76,22 @@ class MidjourneyAPI:
         archive_folder (Path): The path to the archive folder.
         driver (webdriver.Chrome): The Chrome driver.
     """
+    """
+    A class to interact with the Midjourney API.
+
+    Attributes:
+        archive_folder (Path): The path to the archive folder.
+        driver (webdriver.Chrome): The Chrome driver.
+    """
 
     def __init__(self, driver: webdriver.Chrome, archive_folder: Path | str) -> None:
+        """
+        The constructor for the MidjourneyAPI class.
+
+        Args:
+            driver (webdriver.Chrome): The Chrome driver.
+            archive_folder (Path | str): The path to the archive folder.
+        """
         """
         The constructor for the MidjourneyAPI class.
 
@@ -82,6 +105,12 @@ class MidjourneyAPI:
         self.get_user_info()
 
     def log_in(self) -> bool:
+        """
+        Log in to the Midjourney API.
+
+        Returns:
+            bool: True if login is successful, False otherwise.
+        """
         """
         Log in to the Midjourney API.
 
@@ -102,6 +131,12 @@ class MidjourneyAPI:
         pickle.dump(self.driver.get_cookies(), open(self.cookies_path, "wb"))
 
     def log_in(self) -> bool:
+        """
+        Log in to the Midjourney API.
+
+        Returns:
+            bool: True if login is successful, False otherwise.
+        """
         self.load_cookies()
         try:
             self.driver.get(Constants.home_url)
