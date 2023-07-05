@@ -6,6 +6,10 @@ Note: the terms of use of Midjourney disallow any automation!
 
 dimjournal uses the Selenium WebDriver to log into the Midjourney website, fetch user data, and download job information and images. The files are stored a folder of your choice.
 
+## Changelog
+
+- v1.0.3: Tested on macOS in July 2023
+
 ## Installation
 
 ```
