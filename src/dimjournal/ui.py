@@ -1,11 +1,16 @@
 import urwid
+from .dimjournal import download
 
-def exit_on_q(key):
+def handle_input(key):
     if key in ('q', 'Q'):
         raise urwid.ExitMainLoop()
+    elif key == 'd':
+        archive_folder = edit.get_edit_text()
+        download(archive_folder)
 
-def main(archive_folder):
-    txt = urwid.Text(f"Archive folder: {archive_folder}\nPress 'd' to download, 'q' to quit")
-    fill = urwid.Filler(txt, 'top')
-    loop = urwid.MainLoop(fill, unhandled_input=exit_on_q)
+edit = urwid.Edit('Enter archive folder: ')
+fill = urwid.Filler(edit, 'top')
+loop = urwid.MainLoop(fill, unhandled_input=handle_input)
+
+def main():
     loop.run()
