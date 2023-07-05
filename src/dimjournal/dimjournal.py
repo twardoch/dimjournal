@@ -11,10 +11,8 @@ from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
 
-import fire
 import numpy as np
 import pymtpng
-import requests
 import undetected_chromedriver as webdriver
 from bs4 import BeautifulSoup
 from PIL import Image
@@ -333,7 +331,3 @@ def download(
         _log.warn("Caught KeyboardInterrupt")
     finally:
         driver.quit()
-
-
-if __name__ == "__main__":
-    fire.Fire(download)
