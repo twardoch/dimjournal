@@ -26,7 +26,7 @@ from tqdm import tqdm
 _log = logging.getLogger("dimjournal")
 
 
-class URLsAndConstants:
+class Constants:
     date_format = "%Y-%m-%d %H:%M:%S.%f"
     home_url = "https://www.midjourney.com/home/"
     app_url = "https://www.midjourney.com/app/"
@@ -52,21 +52,10 @@ def get_date_ninety_days_prior(date_string: str) -> str:
     Returns:
         str: The date string 90 days prior to the given date.
     """
-    """
-    Calculate the date 90 days before the given date.
-
-    Args:
-        date_string (str): The date string in the format "%Y-%m-%d %H:%M:%S.%f".
-
-    Returns:
-        str: The date string 90 days before the given date.
-    """
-DAYS_PRIOR = 90
-
-def get_date_ninety_days_prior(date_string: str) -> str:
-    date_obj = dt.datetime.strptime(date_string, URLsAndConstants.date_format)
+    DAYS_PRIOR = 90
+    date_obj = dt.datetime.strptime(date_string, Constants.date_format)
     prev_day_obj = date_obj - dt.timedelta(days=DAYS_PRIOR)
-    prev_day_string = prev_day_obj.strftime(URLsAndConstants.date_format)
+    prev_day_string = prev_day_obj.strftime(Constants.date_format)
     return prev_day_string
 
 
@@ -78,22 +67,8 @@ class MidjourneyAPI:
         archive_folder (Path): The path to the archive folder.
         driver (webdriver.Chrome): The Chrome driver.
     """
-    """
-    A class to interact with the Midjourney API.
-
-    Attributes:
-        archive_folder (Path): The path to the archive folder.
-        driver (webdriver.Chrome): The Chrome driver.
-    """
 
     def __init__(self, driver: webdriver.Chrome, archive_folder: Path | str) -> None:
-        """
-        The constructor for the MidjourneyAPI class.
-
-        Args:
-            driver (webdriver.Chrome): The Chrome driver.
-            archive_folder (Path | str): The path to the archive folder.
-        """
         """
         The constructor for the MidjourneyAPI class.
 
@@ -113,12 +88,7 @@ class MidjourneyAPI:
         Returns:
             bool: True if login is successful, False otherwise.
         """
-        """
-        Log in to the Midjourney API.
 
-        Returns:
-            bool: True if login is successful, False otherwise.
-        """
     def load_cookies(self):
         self.cookies_path = Path(self.archive_folder, Constants.cookies_pkl)
         if self.cookies_path.is_file():
@@ -156,6 +126,7 @@ class MidjourneyAPI:
         except Exception as e:
             _log.error(f"Failed to get session token: {str(e)}")
             return False
+
     def load_user_info(self):
         self.user_info = {}
         self.user_json = Path(self.archive_folder, Constants.user_json)
@@ -170,9 +141,7 @@ class MidjourneyAPI:
         try:
             self.driver.get(Constants.account_url)
             WebDriverWait(self.driver, 60 * 10).until(
-                EC.presence_of_element_located(
-                    (By.ID, Constants.account_element_id)
-                )
+                EC.presence_of_element_located((By.ID, Constants.account_element_id))
             )
             soup = BeautifulSoup(self.driver.page_source, "html.parser")
             script_tag_contents = soup.find(
