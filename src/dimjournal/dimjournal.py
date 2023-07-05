@@ -61,10 +61,12 @@ def get_date_ninety_days_prior(date_string: str) -> str:
     Returns:
         str: The date string 90 days before the given date.
     """
-    date_obj = dt.datetime.strptime(date_string, Constants.date_format)
-    prev_day_obj = date_obj - dt.timedelta(days=90)
-    prev_day_string = prev_day_obj.strftime(Constants.date_format)
+DAYS_PRIOR = 90
 
+def get_date_ninety_days_prior(date_string: str) -> str:
+    date_obj = dt.datetime.strptime(date_string, URLsAndConstants.date_format)
+    prev_day_obj = date_obj - dt.timedelta(days=DAYS_PRIOR)
+    prev_day_string = prev_day_obj.strftime(URLsAndConstants.date_format)
     return prev_day_string
 
 
