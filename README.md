@@ -1,10 +1,10 @@
-# DimJournal
+# Dimjournal
 
-DimJournal is a Midjourney backup tool. It automatically downloads the metadata archive and the upscaled images from Midjourney into a local archive (folder tree). It also embeds some basic metadata (like the prompt) into the PNG files. 
+Dimjournal is a Midjourney backup tool. It automatically downloads the metadata archive and the upscaled images from Midjourney into a local archive (folder tree). It also embeds some basic metadata (like the prompt) into the PNG files. 
 
 _Note: the terms of use of Midjourney disallow any automation._
 
-DimJournal is a Python tool uses the Selenium WebDriver to log into the Midjourney website, fetch user data, and download job information and images. The files are stored in the `midjourney/dimjournal` subfolder inside your `Pictures`/`My Pictures` folder, or in a folder that specify.
+Dimjournal is a Python tool uses the Selenium WebDriver to log into the Midjourney website, fetch user data, and download job information and images. 
 
 ## Changelog
 
@@ -35,13 +35,13 @@ In Terminal, run:
 dimjournal
 ```
 
-or:
+Dimjournal will open a browser where you need to log into MidJourney. The tool will create the backup folder, which by default is the `midjourney/dimjournal` subfolder inside your `Pictures`/`My Pictures` folder. It will operate the browser, download all metadata (up to 2,500 last upscale jobs, and up to 2,500 jobs), and save it in JSON files in the backup folder. Then it will use the browser to download all upscales that are not in the backup folder. If you run the tool again, it will only download new metadata, and new images. 
+
+To specify a different backup folder, use: 
 
 ```bash
 python3 -m dimjournal --archive_folder /path/to/your/archive/folder
 ```
-
-This should open a browser where you need to log into MidJourney. Then the tool will operate the browser and download all metadata (up to 2,500 last upscale jobs, and up to 2,500 jobs). Then it will use the browser to download all upscales that are not in the backup folder. If you run the tool again, it will only download new metadata, and new images. 
 
 ### Python
 
