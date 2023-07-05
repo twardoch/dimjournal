@@ -4,13 +4,22 @@ dimjournal is a Python utility for automatically downloading upscaled images fro
 
 Note: the terms of use of Midjourney disallow any automation!
 
-dimjournal uses the Selenium WebDriver to log into the Midjourney website, fetch user data, and download job information and images. The files are stored a folder of your choice.
+dimjournal uses the Selenium WebDriver to log into the Midjourney website, fetch user data, and download job information and images. The files are stored in the `midjourney/dimjournal` subfolder inside your `Pictures`/`My Pictures` folder, or in a folder of your choice if you specify it.
 
 ## Changelog
 
+- v1.0.6: Fixes
 - v1.0.3: Tested on macOS in July 2023
 
 ## Installation
+
+Stable version:
+
+```
+pip install dimjournal
+```
+
+Development version:
 
 ```
 python3 -m pip install git+https://github.com/twardoch/dimjournal
