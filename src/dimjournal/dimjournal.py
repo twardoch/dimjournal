@@ -119,36 +119,40 @@ class MidjourneyAPI:
         except Exception as e:
             _log.error(f"Failed to get session token: {str(e)}")
             return False
-    def get_user_info(self) -> bool:
-        """
-        Get the user information from the Midjourney API.
-
-        Returns:
-            bool: True if the user information is successfully retrieved, False otherwise.
-        """
+    def load_user_info(self):
         self.user_info = {}
         self.user_json = Path(self.archive_folder, Constants.user_json)
         if self.user_json.is_file():
             self.user_info = json.loads(self.user_json.read_text())
         else:
-            try:
-                self.driver.get(Constants.account_url)
-                WebDriverWait(self.driver, 60 * 10).until(
-                    EC.presence_of_element_located(
-                        (By.ID, Constants.account_element_id)
-                    )
-                )
-                soup = BeautifulSoup(self.driver.page_source, "html.parser")
-                script_tag_contents = soup.find(
-                    "script", id=Constants.account_element_id
-                ).text
-                self.user_info = json.loads(script_tag_contents)
+            self.user_info = self.fetch_user_info()
+            if self.user_info:
                 self.user_json.write_text(json.dumps(self.user_info))
-            except Exception as e:
-                _log.error(f"Failed to get user info: {str(e)}")
-                return False
-        self.user_id = self.user_info["props"]["pageProps"]["user"]["id"]
-        return True
+
+    def fetch_user_info(self):
+        try:
+            self.driver.get(Constants.account_url)
+            WebDriverWait(self.driver, 60 * 10).until(
+                EC.presence_of_element_located(
+                    (By.ID, Constants.account_element_id)
+                )
+            )
+            soup = BeautifulSoup(self.driver.page_source, "html.parser")
+            script_tag_contents = soup.find(
+                "script", id=Constants.account_element_id
+            ).text
+            return json.loads(script_tag_contents)
+        except Exception as e:
+            _log.error(f"Failed to get user info: {str(e)}")
+            return None
+
+    def get_user_info(self) -> bool:
+        self.load_user_info()
+        if self.user_info:
+            self.user_id = self.user_info["props"]["pageProps"]["user"]["id"]
+            return True
+        else:
+            return False
 
     def request_recent_jobs(
         self,
