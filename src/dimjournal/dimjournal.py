@@ -443,8 +443,9 @@ def download(
         limit (Optional[int]): The maximum number of pages to download.
     """
     logging.basicConfig(level=logging.INFO)
+    import os
     archive_folder = (
-        Path(archive_folder) if archive_folder else Path(Path.cwd(), "mj-archive2")
+        Path(archive_folder) if archive_folder else Path(os.path.expanduser("~"), "Pictures", "midjourney", "dimjournal")
     )
     if not archive_folder.is_dir():
         archive_folder.mkdir(parents=True)
