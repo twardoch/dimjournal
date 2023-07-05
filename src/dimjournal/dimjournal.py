@@ -444,8 +444,9 @@ def download(
     """
     logging.basicConfig(level=logging.INFO)
     import os
+    pictures_folder = "My Pictures" if os.name == 'nt' else "Pictures"
     archive_folder = (
-        Path(archive_folder) if archive_folder else Path(os.path.expanduser("~"), "Pictures", "midjourney", "dimjournal")
+        Path(archive_folder) if archive_folder else Path(os.path.expanduser("~"), pictures_folder, "midjourney", "dimjournal")
     )
     if not archive_folder.is_dir():
         archive_folder.mkdir(parents=True)
