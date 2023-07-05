@@ -88,6 +88,7 @@ class MidjourneyAPI:
         Returns:
             bool: True if login is successful, False otherwise.
         """
+    def load_cookies(self):
         self.cookies_path = Path(self.archive_folder, Constants.cookies_pkl)
         if self.cookies_path.is_file():
             cookies = pickle.load(open(self.cookies_path, "rb"))
@@ -96,6 +97,12 @@ class MidjourneyAPI:
                     self.driver.add_cookie(cookie)
                 except InvalidCookieDomainException:
                     pass
+
+    def save_cookies(self):
+        pickle.dump(self.driver.get_cookies(), open(self.cookies_path, "wb"))
+
+    def log_in(self) -> bool:
+        self.load_cookies()
         try:
             self.driver.get(Constants.home_url)
             WebDriverWait(self.driver, 60 * 10).until(EC.url_to_be(Constants.app_url))
@@ -104,7 +111,7 @@ class MidjourneyAPI:
             )
             cookie = self.driver.get_cookie(Constants.session_token_cookie)
             if cookie is not None:
-                pickle.dump(self.driver.get_cookies(), open(self.cookies_path, "wb"))
+                self.save_cookies()
                 self.session_token = cookie["value"]
                 return True
             else:
@@ -112,7 +119,6 @@ class MidjourneyAPI:
         except Exception as e:
             _log.error(f"Failed to get session token: {str(e)}")
             return False
-
     def get_user_info(self) -> bool:
         """
         Get the user information from the Midjourney API.
