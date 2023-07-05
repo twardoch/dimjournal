@@ -60,13 +60,34 @@ def prev_day(date_string: str) -> str:
 
 
 class MidjourneyAPI:
-    def __init__(self, driver: webdriver.Chrome, archive_folder: Path | str):
+    """
+    A class to interact with the Midjourney API.
+
+    Attributes:
+        archive_folder (Path): The path to the archive folder.
+        driver (webdriver.Chrome): The Chrome driver.
+    """
+
+    def __init__(self, driver: webdriver.Chrome, archive_folder: Path | str) -> None:
+        """
+        The constructor for the MidjourneyAPI class.
+
+        Args:
+            driver (webdriver.Chrome): The Chrome driver.
+            archive_folder (Path | str): The path to the archive folder.
+        """
         self.archive_folder = Path(archive_folder)
         self.driver = driver
         self.log_in()
         self.get_user_info()
 
-    def log_in(self):
+    def log_in(self) -> bool:
+        """
+        Log in to the Midjourney API.
+
+        Returns:
+            bool: True if login is successful, False otherwise.
+        """
         self.cookies_path = Path(self.archive_folder, Constants.cookies_pkl)
         if self.cookies_path.is_file():
             cookies = pickle.load(open(self.cookies_path, "rb"))
@@ -92,7 +113,13 @@ class MidjourneyAPI:
             _log.error(f"Failed to get session token: {str(e)}")
             return False
 
-    def get_user_info(self):
+    def get_user_info(self) -> bool:
+        """
+        Get the user information from the Midjourney API.
+
+        Returns:
+            bool: True if the user information is successfully retrieved, False otherwise.
+        """
         self.user_info = {}
         self.user_json = Path(self.archive_folder, Constants.user_json)
         if self.user_json.is_file():
@@ -124,6 +151,18 @@ class MidjourneyAPI:
         job_type: str | None = None,
         amount: int = 50,
     ) -> List[dict]:
+        """
+        Request recent jobs from the Midjourney API.
+
+        Args:
+            from_date (str | None): The date from which to request jobs.
+            page (int | None): The page number to request.
+            job_type (str | None): The type of job to request.
+            amount (int): The number of jobs to request.
+
+        Returns:
+            List[dict]: A list of jobs.
+        """
         params = {}
         if from_date:
             pass  # params["fromDate"] = prev_day(from_date)
@@ -165,6 +204,14 @@ class MidjourneyJobCrawler:
     def __init__(
         self, api: MidjourneyAPI, archive_folder: Path, job_type: str | None = None
     ):
+        """
+        The constructor for the MidjourneyJobCrawler class.
+
+        Args:
+            api (MidjourneyAPI): The Midjourney API.
+            archive_folder (Path): The path to the archive folder.
+            job_type (Optional[str]): The type of job to crawl.
+        """
         self.api = api
         self.job_type = job_type
         self.archive_folder = archive_folder
@@ -176,12 +223,24 @@ class MidjourneyJobCrawler:
         self.archive_data = []
 
     def load_archive_data(self):
+        """
+        Load the archive data.
+        """
         if self.archive_file.is_file():
             self.archive_data = json.loads(self.archive_file.read_text())
         else:
             self.archive_data = []
 
     def update_archive_data(self, job_listing: List[dict]):
+        """
+        Update the archive data with the given job listing.
+
+        Args:
+            job_listing (List[dict]): The job listing.
+
+        Returns:
+            bool: True if the archive data was updated, False otherwise.
+        """
         new_entries = [
             job
             for job in job_listing
@@ -199,6 +258,13 @@ class MidjourneyJobCrawler:
         limit: int | None = None,
         from_date: str | None = None,
     ):
+        """
+        Crawl the Midjourney API for job listings.
+
+        Args:
+            limit (Optional[int]): The maximum number of pages to crawl.
+            from_date (Optional[str]): The date from which to start crawling.
+        """
         job_str = self.job_type if self.job_type else "all"
         self.load_archive_data()
         pages = range(1, limit + 1) if limit else itertools.count(1)
@@ -220,6 +286,13 @@ class MidjourneyJobCrawler:
 
 class MidjourneyDownloader:
     def __init__(self, api, archive_folder):
+        """
+        The constructor for the MidjourneyDownloader class.
+
+        Args:
+            api (MidjourneyAPI): The Midjourney API.
+            archive_folder (Path): The path to the archive folder.
+        """
         self.api = api
         self.archive_folder = Path(archive_folder)
         self.archive_folder.mkdir(parents=True, exist_ok=True)
@@ -227,6 +300,15 @@ class MidjourneyDownloader:
         self.jobs_upscale = self.read_jobs()
 
     def fetch_image(self, url):
+        """
+        Fetch an image from the given URL.
+
+        Args:
+            url (str): The URL of the image.
+
+        Returns:
+            Tuple[bytes, str]: The image data and the image type.
+        """
         self.api.driver.get(url)
         data_uri = self.api.driver.execute_async_script(Constants.mj_download_image_js)
         header, encoded = data_uri.split(",", 1)
@@ -235,15 +317,33 @@ class MidjourneyDownloader:
         return image_data, image_type
 
     def read_jobs(self):
+        """
+        Read the job listings.
+
+        Returns:
+            List[dict]: The job listings.
+        """
         with open(self.jobs_json_path, "r") as file:
             return json.load(file)
 
     def save_jobs(self):
+        """
+        Save the job listings.
+        """
         with open(self.jobs_json_path, "w") as file:
             json.dump(self.jobs_upscale, file, indent=2)
         _log.debug(f"Updated {self.jobs_json_path}")
 
     def create_folders(self, dt_obj):
+        """
+        Create folders for the given date.
+
+        Args:
+            dt_obj (datetime): The date.
+
+        Returns:
+            Path: The path to the created folder.
+        """
         dt_year = f"{dt_obj.year}"
         path_year = Path(self.archive_folder, dt_year)
         path_year.mkdir(parents=True, exist_ok=True)
@@ -253,6 +353,17 @@ class MidjourneyDownloader:
         return path_month
 
     def fetch_and_write_image(self, image_url, image_path, info):
+        """
+        Fetch an image from the given URL and write it to the given path.
+
+        Args:
+            image_url (str): The URL of the image.
+            image_path (Path): The path to write the image.
+            info (dict): The metadata of the image.
+
+        Returns:
+            bool: True if the image was successfully fetched and written, False otherwise.
+        """
         if not image_path.is_file():
             image_data, image_type = self.fetch_image(image_url)
             if image_type == "png":
@@ -272,6 +383,10 @@ class MidjourneyDownloader:
             return False
 
     def download_missing(self):
+        """
+        Download missing images.
+        """
+
         with tqdm(total=len(self.jobs_upscale), desc="Downloading") as pbar:
             last_tick = 0
             for job_i, job in enumerate(self.jobs_upscale):
@@ -319,6 +434,14 @@ def download(
     user_id: str | None = None,
     limit: int | None = None,
 ):
+    """
+    Download images from the Midjourney API.
+
+    Args:
+        archive_folder (Optional[Union[Path, str]]): The path to the archive folder.
+        user_id (Optional[str]): The user ID.
+        limit (Optional[int]): The maximum number of pages to download.
+    """
     logging.basicConfig(level=logging.INFO)
     archive_folder = (
         Path(archive_folder) if archive_folder else Path(Path.cwd(), "mj-archive2")
