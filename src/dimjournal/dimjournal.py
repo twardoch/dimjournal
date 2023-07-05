@@ -23,7 +23,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from slugify import slugify
 from tqdm import tqdm
 
-_log = logging.getLogger("mj-metadata-archiver")
+_log = logging.getLogger("dimjournal")
 
 
 class Constants:
@@ -444,12 +444,16 @@ def download(
     """
     logging.basicConfig(level=logging.INFO)
     import os
-    pictures_folder = "My Pictures" if os.name == 'nt' else "Pictures"
+
+    pictures_folder = "My Pictures" if os.name == "nt" else "Pictures"
     archive_folder = (
-        Path(archive_folder) if archive_folder else Path(os.path.expanduser("~"), pictures_folder, "midjourney", "dimjournal")
+        Path(archive_folder)
+        if archive_folder
+        else Path(os.path.expanduser("~"), pictures_folder, "midjourney", "dimjournal")
     )
     if not archive_folder.is_dir():
         archive_folder.mkdir(parents=True)
+    _log.info(f"Data will be saved in: {archive_folder}")
     options = webdriver.ChromeOptions()
     driver = webdriver.Chrome(use_subprocess=True, options=options)
     api = MidjourneyAPI(driver=driver, archive_folder=archive_folder)
