@@ -26,7 +26,7 @@ from tqdm import tqdm
 _log = logging.getLogger("dimjournal")
 
 
-class Constants:
+class URLsAndConstants:
     date_format = "%Y-%m-%d %H:%M:%S.%f"
     home_url = "https://www.midjourney.com/home/"
     app_url = "https://www.midjourney.com/app/"
@@ -42,7 +42,7 @@ class Constants:
     mj_download_image_js = """var callback=arguments[arguments.length-1];function getDataUri(e,n){var a=new XMLHttpRequest;a.onload=function(){var e=new FileReader;e.onloadend=function(){n(e.result)},e.readAsDataURL(a.response)},a.open("GET",e),a.responseType="blob",a.send()}getDataUri(document.querySelector("img").src,function(e){callback(e)});"""
 
 
-def prev_day(date_string: str) -> str:
+def get_date_ninety_days_prior(date_string: str) -> str:
     """
     Calculate the date 90 days before the given date.
 
