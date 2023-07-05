@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 import fire
-
-from .ui import main as ui_main
+from pathlib import Path
+from .dimjournal import download
 
 
 def cli():
-    ui_main()
+    fire.core.Display = lambda lines, out: print(*lines, file=out)
+    fire.Fire(download)
 
 
 if __name__ == "__main__":
