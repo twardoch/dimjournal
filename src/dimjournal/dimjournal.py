@@ -8,7 +8,6 @@ import json
 import logging
 import pickle
 from pathlib import Path
-from typing import List
 from urllib.parse import urlparse
 
 import numpy as np
@@ -136,21 +135,10 @@ class MidjourneyAPI:
     def load_user_info(self):
         self.user_info = {}
         self.user_json = Path(self.archive_folder, Constants.user_json)
-        try:
-            if self.user_json.is_file():
-                _log.info(f"Loading user info from {self.user_json}")
-                self.user_info = json.loads(self.user_json.read_text())
-            else:
-                _log.info(f"User info file {self.user_json} not found. Fetching new.")
-                self.user_info = self.fetch_user_info()
-                if self.user_info:
-                    self.user_json.write_text(json.dumps(self.user_info, indent=2))
-                    _log.info(f"Saved fetched user info to {self.user_json}")
-        except json.JSONDecodeError as e:
-            _log.error(
-                f"Error decoding JSON from {self.user_json}: {str(e)}", exc_info=True
-            )
-            # Attempt to fetch fresh user info if local file is corrupted
+        if self.user_json.is_file():
+            self.user_info = json.loads(self.user_json.read_text())
+            _log.info(f"Loaded user data from {self.user_json}")
+        else:
             self.user_info = self.fetch_user_info()
             if self.user_info:
                 self.user_json.write_text(json.dumps(self.user_info, indent=2))
@@ -223,7 +211,7 @@ class MidjourneyAPI:
         page: int | None = None,
         job_type: str | None = None,
         amount: int = 50,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """
         Request recent jobs from the Midjourney API.
 
@@ -254,42 +242,21 @@ class MidjourneyAPI:
         url = f"{Constants.api_url}?{query_string}"
 
         _log.debug(f"Requesting {url}")
-        try:
-            _log.debug(f"Requesting recent jobs from URL: {url}")
-            self.driver.get(url)
-            # It's good practice to wait for a specific element that indicates page load,
-            # but for an API-like response in <pre> tag, this might be immediate.
-            # If issues arise, add a WebDriverWait for the <pre> tag.
-            soup = BeautifulSoup(self.driver.page_source, "html.parser")
-            pre_tag = soup.find("pre")
-            if not pre_tag:
-                page_snippet = self.driver.page_source[:500]
-                _log.error(f"No <pre> on {url}. Snp: {page_snippet}...")  # noqa: E501
-                return []
+        self.driver.get(url)
+        soup = BeautifulSoup(self.driver.page_source, "html.parser")
+        pre_tag_contents = soup.find("pre").text
+        job_listing = json.loads(pre_tag_contents)
 
-            pre_tag_contents = pre_tag.text
-            job_listing = json.loads(pre_tag_contents)
-
-            if isinstance(job_listing, list):
-                if not job_listing:
-                    _log.debug("Received an empty list of jobs.")
+        if isinstance(job_listing, list):
+            if len(job_listing) > 0 and isinstance(job_listing[0], dict):
+                if all(f in job_listing[0] for f in Constants.job_details):
+                    _log.debug(f"Got job listing with {len(job_listing)} jobs")
+                    return job_listing
+                if job_listing[0] == {"msg": "No jobs found."}:
+                    _log.debug("Response: 'No jobs found'")
                     return []
-                if isinstance(job_listing[0], dict):
-                    if job_listing[0].get("msg") == "No jobs found.":
-                        _log.debug("Response: 'No jobs found.'")
-                        return []
-                    if all(f in job_listing[0] for f in Constants.job_details):
-                        _log.debug(f"Got {len(job_listing)} jobs.")
-                        return job_listing
-                    _log.warning(
-                        "Job listing items lack expected structure. First item: "
-                        f"{job_listing[0]}"
-                    )
-                    return []
-                _log.warning(
-                    "Job listing is list, but elements are not dicts. "
-                    f"First type: {type(job_listing[0])}"
-                )
+            elif len(job_listing) == 0:
+                _log.debug("Response: 'No jobs found'")
                 return []
             _log.error(
                 f"Unexpected job listing format. Expected list, got "
@@ -361,7 +328,7 @@ class MidjourneyJobCrawler:
             )
             self.archive_data = []
 
-    def update_archive_data(self, job_listing: List[dict]):
+    def update_archive_data(self, job_listing: list[dict]):
         """
         Update the archive data with the given job listing.
 
@@ -489,27 +456,8 @@ class MidjourneyDownloader:
         Returns:
             List[dict]: The job listings.
         """
-        try:
-            _log.info(f"Reading jobs from {self.jobs_json_path}")
-            with open(self.jobs_json_path, "r") as file:
-                jobs_data = json.load(file)
-            _log.info(f"Successfully read {len(jobs_data)} job listings.")
-            return jobs_data
-        except FileNotFoundError:
-            _log.warning(f"{self.jobs_json_path} not found. Returning empty list.")
-            return []
-        except json.JSONDecodeError as e:
-            _log.error(
-                f"Error decoding {self.jobs_json_path}: {str(e)}. Returning empty.",
-                exc_info=True,
-            )
-            return []
-        except Exception as e:
-            _log.error(
-                f"Error reading {self.jobs_json_path}: {str(e)}. Returning empty.",
-                exc_info=True,
-            )
-            return []
+        with open(self.jobs_json_path) as file:
+            return json.load(file)
 
     def save_jobs(self):
         """
@@ -582,7 +530,11 @@ class MidjourneyDownloader:
         try:
             if image_type == "png":
                 try:
-                    img_array = np.array(Image.open(io.BytesIO(image_data)))
+                    image_array = np.array(Image.open(io.BytesIO(image_data)))
+                    with open(image_path, "wb") as fh:
+                        pymtpng.encode_png(image_array, fh, info=info)
+                except Exception:
+                    _log.error(f"Fishy PNG: {image_url}")
                     with open(image_path, "wb") as fh:
                         pymtpng.encode_png(img_array, fh, info=info)
                     _log.info(f"Saved PNG w/ metadata: {image_path}")

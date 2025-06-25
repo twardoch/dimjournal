@@ -1,4 +1,6 @@
-from importlib.metadata import PackageNotFoundError, version
+import sys
+
+from .dimjournal import download
 
 # Keep 'download' import if it's meant to be part of the public API of the package
 from .dimjournal import download  # noqa: F401 - Preserving for potential public API use
