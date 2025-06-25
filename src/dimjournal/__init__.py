@@ -1,17 +1,17 @@
-import sys
-from .dimjournal import download
+from importlib.metadata import PackageNotFoundError, version
 
-if sys.version_info[:2] >= (3, 8):
-    # TODO: Import directly (no need for conditional) when `python_requires = >= 3.8`
-    from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
-else:
-    from importlib_metadata import PackageNotFoundError, version  # pragma: no cover
+# Keep 'download' import if it's meant to be part of the public API of the package
+from .dimjournal import download  # noqa: F401 - Preserving for potential public API use
 
 try:
     # Change here if project is renamed and does not equal the package name
-    dist_name = __name__
+    dist_name = "dimjournal"  # Ensure this matches the package name in setup.cfg
     __version__ = version(dist_name)
 except PackageNotFoundError:  # pragma: no cover
+    # This typically happens if pkg is not installed (e.g., editable mode might
+    # work for imports, but not for version data).
     __version__ = "unknown"
 finally:
+    # Clean up to avoid leaking version and PackageNotFoundError into the module's namespace
+    # Note: 'version' here refers to the import from importlib.metadata, not __version__
     del version, PackageNotFoundError
