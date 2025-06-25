@@ -16,7 +16,7 @@ import pymtpng
 import undetected_chromedriver as webdriver
 from bs4 import BeautifulSoup
 from PIL import Image
-from selenium.common.exceptions import InvalidCookieDomainException
+from selenium.common.exceptions import InvalidCookieDomainException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -39,7 +39,13 @@ class Constants:
     user_json = Path("user.json")
     jobs_upscaled_json = Path("jobs_upscaled.json")
     cookies_pkl = Path("cookies.pkl")
-    mj_download_image_js = """var callback=arguments[arguments.length-1];function getDataUri(e,n){var a=new XMLHttpRequest;a.onload=function(){var e=new FileReader;e.onloadend=function(){n(e.result)},e.readAsDataURL(a.response)},a.open("GET",e),a.responseType="blob",a.send()}getDataUri(document.querySelector("img").src,function(e){callback(e)});"""
+    mj_download_image_js = (
+        "var callback=arguments[arguments.length-1];"
+        "function getDataUri(e,n){"
+        'var a=new XMLHttpRequest;a.onload=function(){var e=new FileReader;e.onloadend=function(){n(e.result)},e.readAsDataURL(a.response)},a.open("GET",e),a.responseType="blob",a.send()'  # noqa: E501
+        "}"
+        'getDataUri(document.querySelector("img").src,function(e){callback(e)});'
+    )
 
 
 def get_date_ninety_days_prior(date_string: str) -> str:
@@ -81,14 +87,6 @@ class MidjourneyAPI:
         self.log_in()
         self.get_user_info()
 
-    def log_in(self) -> bool:
-        """
-        Log in to the Midjourney API.
-
-        Returns:
-            bool: True if login is successful, False otherwise.
-        """
-
     def load_cookies(self):
         self.cookies_path = Path(self.archive_folder, Constants.cookies_pkl)
         if self.cookies_path.is_file():
@@ -111,53 +109,112 @@ class MidjourneyAPI:
         """
         self.load_cookies()
         try:
+            _log.info(f"Attempting to log in to Midjourney: {Constants.home_url}")
             self.driver.get(Constants.home_url)
             WebDriverWait(self.driver, 60 * 10).until(EC.url_to_be(Constants.app_url))
+            _log.info(f"Successfully navigated to app URL: {Constants.app_url}")
             WebDriverWait(self.driver, 60 * 10).until(
                 EC.presence_of_element_located((By.ID, Constants.app_element_id))
             )
+            _log.info(f"App element located: {Constants.app_element_id}")
             cookie = self.driver.get_cookie(Constants.session_token_cookie)
             if cookie is not None:
                 self.save_cookies()
                 self.session_token = cookie["value"]
+                _log.info("Successfully logged in and obtained session token.")
                 return True
             else:
+                _log.error("Failed to obtain session token cookie after navigation.")
                 return False
+        except TimeoutException:
+            _log.error("Timeout during login: page navigation or element presence.")
+            return False
         except Exception as e:
-            _log.error(f"Failed to get session token: {str(e)}")
+            _log.error(f"Unexpected error during login: {str(e)}", exc_info=True)
             return False
 
     def load_user_info(self):
         self.user_info = {}
         self.user_json = Path(self.archive_folder, Constants.user_json)
-        if self.user_json.is_file():
-            self.user_info = json.loads(self.user_json.read_text())
-        else:
+        try:
+            if self.user_json.is_file():
+                _log.info(f"Loading user info from {self.user_json}")
+                self.user_info = json.loads(self.user_json.read_text())
+            else:
+                _log.info(f"User info file {self.user_json} not found. Fetching new.")
+                self.user_info = self.fetch_user_info()
+                if self.user_info:
+                    self.user_json.write_text(json.dumps(self.user_info, indent=2))
+                    _log.info(f"Saved fetched user info to {self.user_json}")
+        except json.JSONDecodeError as e:
+            _log.error(
+                f"Error decoding JSON from {self.user_json}: {str(e)}", exc_info=True
+            )
+            # Attempt to fetch fresh user info if local file is corrupted
             self.user_info = self.fetch_user_info()
             if self.user_info:
-                self.user_json.write_text(json.dumps(self.user_info))
+                self.user_json.write_text(json.dumps(self.user_info, indent=2))
+                _log.info(
+                    f"Saved newly fetched user info to {self.user_json} "
+                    "after JSON error."
+                )
+        except Exception as e:
+            _log.error(f"Unexpected error in load_user_info: {str(e)}", exc_info=True)
 
     def fetch_user_info(self):
         try:
+            _log.info(f"Fetching user info from {Constants.account_url}")
             self.driver.get(Constants.account_url)
             WebDriverWait(self.driver, 60 * 10).until(
                 EC.presence_of_element_located((By.ID, Constants.account_element_id))
             )
+            _log.info(
+                f"Account page loaded, element {Constants.account_element_id} found."
+            )
             soup = BeautifulSoup(self.driver.page_source, "html.parser")
-            script_tag_contents = soup.find(
-                "script", id=Constants.account_element_id
-            ).text
-            return json.loads(script_tag_contents)
+            script_tag = soup.find("script", id=Constants.account_element_id)
+            if not script_tag:
+                _log.error(
+                    f"Script tag ID {Constants.account_element_id} not found "
+                    "on account page."
+                )
+                return None
+            script_tag_contents = script_tag.text
+            user_data = json.loads(script_tag_contents)
+            _log.info("Successfully fetched and parsed user info.")
+            return user_data
+        except TimeoutException:
+            _log.error(
+                f"Timeout waiting for account page elements: {Constants.account_url}"
+            )
+            return None
+        except json.JSONDecodeError as e:
+            _log.error(
+                f"Error decoding JSON from account page script: {str(e)}",
+                exc_info=True,
+            )
+            return None
         except Exception as e:
-            _log.error(f"Failed to get user info: {str(e)}")
+            _log.error(f"Unexpected error fetching user info: {str(e)}", exc_info=True)
             return None
 
     def get_user_info(self) -> bool:
         self.load_user_info()
-        if self.user_info:
+        if (
+            self.user_info
+            and "props" in self.user_info
+            and "pageProps" in self.user_info["props"]
+            and "user" in self.user_info["props"]["pageProps"]
+            and "id" in self.user_info["props"]["pageProps"]["user"]
+        ):
             self.user_id = self.user_info["props"]["pageProps"]["user"]["id"]
+            _log.info(f"User ID {self.user_id} obtained from user info.")
             return True
         else:
+            _log.error(
+                "User ID not found in user info structure. User info: %s",
+                self.user_info,
+            )  # Consider redacting self.user_info in logs if sensitive
             return False
 
     def request_recent_jobs(
@@ -197,23 +254,65 @@ class MidjourneyAPI:
         url = f"{Constants.api_url}?{query_string}"
 
         _log.debug(f"Requesting {url}")
-        self.driver.get(url)
-        soup = BeautifulSoup(self.driver.page_source, "html.parser")
-        pre_tag_contents = soup.find("pre").text
-        job_listing = json.loads(pre_tag_contents)
-
-        if isinstance(job_listing, list):
-            if len(job_listing) > 0 and isinstance(job_listing[0], dict):
-                if all(f in job_listing[0] for f in Constants.job_details):
-                    _log.debug(f"Got job listing with {len(job_listing)} jobs")
-                    return job_listing
-                if job_listing[0] == {"msg": "No jobs found."}:
-                    _log.debug(f"Response: 'No jobs found'")
-                    return []
-            elif len(job_listing) == 0:
-                _log.debug(f"Response: 'No jobs found'")
+        try:
+            _log.debug(f"Requesting recent jobs from URL: {url}")
+            self.driver.get(url)
+            # It's good practice to wait for a specific element that indicates page load,
+            # but for an API-like response in <pre> tag, this might be immediate.
+            # If issues arise, add a WebDriverWait for the <pre> tag.
+            soup = BeautifulSoup(self.driver.page_source, "html.parser")
+            pre_tag = soup.find("pre")
+            if not pre_tag:
+                page_snippet = self.driver.page_source[:500]
+                _log.error(f"No <pre> on {url}. Snp: {page_snippet}...")  # noqa: E501
                 return []
-        raise ValueError(job_listing)
+
+            pre_tag_contents = pre_tag.text
+            job_listing = json.loads(pre_tag_contents)
+
+            if isinstance(job_listing, list):
+                if not job_listing:
+                    _log.debug("Received an empty list of jobs.")
+                    return []
+                if isinstance(job_listing[0], dict):
+                    if job_listing[0].get("msg") == "No jobs found.":
+                        _log.debug("Response: 'No jobs found.'")
+                        return []
+                    if all(f in job_listing[0] for f in Constants.job_details):
+                        _log.debug(f"Got {len(job_listing)} jobs.")
+                        return job_listing
+                    _log.warning(
+                        "Job listing items lack expected structure. First item: "
+                        f"{job_listing[0]}"
+                    )
+                    return []
+                _log.warning(
+                    "Job listing is list, but elements are not dicts. "
+                    f"First type: {type(job_listing[0])}"
+                )
+                return []
+            _log.error(
+                f"Unexpected job listing format. Expected list, got "
+                f"{type(job_listing)}. Content: {job_listing}"
+            )
+            raise ValueError(f"Unexpected job listing format: {job_listing}")
+        except json.JSONDecodeError as e:
+            content_snippet = (
+                pre_tag_contents[:500] if "pre_tag_contents" in locals() else "N/A"
+            )
+            _log.error(
+                f"JSON decode error from API: {str(e)}. Content: {content_snippet}...",
+                exc_info=True,
+            )
+            return []
+        except TimeoutException:
+            _log.error(f"Timeout requesting recent jobs from {url}", exc_info=True)
+            return []
+        except Exception as e:
+            _log.error(
+                f"Unexpected error requesting recent jobs: {str(e)}", exc_info=True
+            )
+            return []
 
 
 class MidjourneyJobCrawler:
@@ -242,9 +341,24 @@ class MidjourneyJobCrawler:
         """
         Load the archive data.
         """
-        if self.archive_file.is_file():
-            self.archive_data = json.loads(self.archive_file.read_text())
-        else:
+        try:
+            if self.archive_file.is_file():
+                _log.info(f"Loading archive data from {self.archive_file}")
+                self.archive_data = json.loads(self.archive_file.read_text())
+            else:
+                _log.info(f"Archive {self.archive_file} not found. Starting fresh.")
+                self.archive_data = []
+        except json.JSONDecodeError as e:
+            _log.error(
+                f"Error decoding {self.archive_file}: {str(e)}. Starting fresh.",
+                exc_info=True,
+            )
+            self.archive_data = []
+        except Exception as e:
+            _log.error(
+                f"Failed to load {self.archive_file}: {str(e)}. Starting fresh.",
+                exc_info=True,
+            )
             self.archive_data = []
 
     def update_archive_data(self, job_listing: List[dict]):
@@ -264,8 +378,18 @@ class MidjourneyJobCrawler:
         ]
         if new_entries:
             self.archive_data.extend(new_entries)
-            self.archive_file.write_text(json.dumps(self.archive_data, indent=2))
+            try:
+                self.archive_file.write_text(json.dumps(self.archive_data, indent=2))
+                _log.info(
+                    f"Updated {self.archive_file} with {len(new_entries)} new entries."
+                )
+            except IOError as e:
+                _log.error(
+                    f"Failed to write to {self.archive_file}: {str(e)}", exc_info=True
+                )
+                return False  # IO error during save
         else:
+            _log.debug("No new entries to add to the archive.")
             return False
         return True
 
@@ -289,14 +413,14 @@ class MidjourneyJobCrawler:
                 from_date=from_date, page=page, job_type=self.job_type
             )
             if not job_listing:
-                _log.debug(
-                    f"Empty {job_str} job listing batch: reached end of total job listing"
-                )
+                _log.debug(f"Empty {job_str} job listing: end of history.")
                 break
             if not self.update_archive_data(job_listing):
-                _log.debug(f"No new {job_str} jobs found: stopping crawler")
+                _log.debug(f"No new {job_str} jobs found, stopping crawler.")
                 break
-            if from_date is None:
+            # Update from_date to potentially optimize next request,
+            # though current API usage doesn't seem to use it for paging.
+            if from_date is None and job_listing:
                 from_date = job_listing[0]["enqueue_time"]
 
 
@@ -311,8 +435,17 @@ class MidjourneyDownloader:
         """
         self.api = api
         self.archive_folder = Path(archive_folder)
-        self.archive_folder.mkdir(parents=True, exist_ok=True)
-        self.jobs_json_path = Path(self.archive_folder, "jobs_upscale.json")
+        try:
+            self.archive_folder.mkdir(parents=True, exist_ok=True)
+            _log.info(f"Archive folder set to: {self.archive_folder}")
+        except OSError as e:
+            _log.error(
+                f"Error creating archive folder {self.archive_folder}: {str(e)}",
+                exc_info=True,
+            )
+            # This is critical, should probably raise or handle more gracefully
+            # For now, proceeding may lead to errors if path is unusable.
+        self.jobs_json_path = self.archive_folder / "jobs_upscale.json"
         self.jobs_upscale = self.read_jobs()
 
     def fetch_image(self, url):
@@ -325,12 +458,29 @@ class MidjourneyDownloader:
         Returns:
             Tuple[bytes, str]: The image data and the image type.
         """
-        self.api.driver.get(url)
-        data_uri = self.api.driver.execute_async_script(Constants.mj_download_image_js)
-        header, encoded = data_uri.split(",", 1)
-        image_type = header.split(";")[0].split("/")[-1]
-        image_data = base64.b64decode(encoded)
-        return image_data, image_type
+        try:
+            _log.debug(f"Fetching image from URL: {url}")
+            self.api.driver.get(url)
+            # Consider adding WebDriverWait for an element if image loading is slow
+            data_uri = self.api.driver.execute_async_script(
+                Constants.mj_download_image_js
+            )
+            if not data_uri or "," not in data_uri:
+                _log.error(f"Invalid data URI from JS for {url}. Received: {data_uri}")
+                return None, None
+            header, encoded = data_uri.split(",", 1)
+            image_type = header.split(";")[0].split("/")[-1]  # type: ignore
+            image_data = base64.b64decode(encoded)
+            _log.debug(f"Fetched image: type {image_type}, size {len(image_data)}B.")
+            return image_data, image_type
+        except TimeoutException:
+            _log.error(f"Timeout fetching image from {url}", exc_info=True)
+            return None, None
+        except Exception as e:
+            _log.error(
+                f"Unexpected error fetching image from {url}: {e!s}", exc_info=True
+            )
+            return None, None
 
     def read_jobs(self):
         """
@@ -339,16 +489,47 @@ class MidjourneyDownloader:
         Returns:
             List[dict]: The job listings.
         """
-        with open(self.jobs_json_path, "r") as file:
-            return json.load(file)
+        try:
+            _log.info(f"Reading jobs from {self.jobs_json_path}")
+            with open(self.jobs_json_path, "r") as file:
+                jobs_data = json.load(file)
+            _log.info(f"Successfully read {len(jobs_data)} job listings.")
+            return jobs_data
+        except FileNotFoundError:
+            _log.warning(f"{self.jobs_json_path} not found. Returning empty list.")
+            return []
+        except json.JSONDecodeError as e:
+            _log.error(
+                f"Error decoding {self.jobs_json_path}: {str(e)}. Returning empty.",
+                exc_info=True,
+            )
+            return []
+        except Exception as e:
+            _log.error(
+                f"Error reading {self.jobs_json_path}: {str(e)}. Returning empty.",
+                exc_info=True,
+            )
+            return []
 
     def save_jobs(self):
         """
         Save the job listings.
         """
-        with open(self.jobs_json_path, "w") as file:
-            json.dump(self.jobs_upscale, file, indent=2)
-        _log.debug(f"Updated {self.jobs_json_path}")
+        try:
+            _log.info(f"Saving {len(self.jobs_upscale)} jobs to {self.jobs_json_path}")
+            with open(self.jobs_json_path, "w") as file:
+                json.dump(self.jobs_upscale, file, indent=2)
+            _log.info(f"Successfully saved jobs to {self.jobs_json_path}")
+        except IOError as e:
+            _log.error(
+                f"Failed to write jobs to {self.jobs_json_path}: {str(e)}",
+                exc_info=True,
+            )
+        except Exception as e:
+            _log.error(
+                f"Unexpected error saving jobs to {self.jobs_json_path}: {str(e)}",
+                exc_info=True,
+            )
 
     def create_folders(self, dt_obj):
         """
@@ -360,13 +541,22 @@ class MidjourneyDownloader:
         Returns:
             Path: The path to the created folder.
         """
-        dt_year = f"{dt_obj.year}"
-        path_year = Path(self.archive_folder, dt_year)
-        path_year.mkdir(parents=True, exist_ok=True)
-        month = f"{dt_obj.month:02}"
-        path_month = Path(path_year, month)
-        path_month.mkdir(parents=True, exist_ok=True)
-        return path_month
+        try:
+            dt_year = f"{dt_obj.year}"
+            path_year = Path(self.archive_folder, dt_year)
+            path_year.mkdir(parents=True, exist_ok=True)
+
+            month = f"{dt_obj.month:02}"
+            path_month = Path(path_year, month)
+            path_month.mkdir(parents=True, exist_ok=True)
+            _log.debug(f"Ensured directory exists: {path_month}")
+            return path_month
+        except OSError as e:
+            _log.error(
+                f"Error creating directory for {dt_obj}: {str(e)}", exc_info=True
+            )
+            # Fallback to base archive_folder; images won't be organized by date.
+            return self.archive_folder
 
     def fetch_and_write_image(self, image_url, image_path, info):
         """
@@ -380,33 +570,78 @@ class MidjourneyDownloader:
         Returns:
             bool: True if the image was successfully fetched and written, False otherwise.
         """
-        if not image_path.is_file():
-            image_data, image_type = self.fetch_image(image_url)
+        if image_path.is_file():
+            _log.debug(f"Image already exists, skipping: {image_path}")
+            return False
+
+        image_data, image_type = self.fetch_image(image_url)
+        if not image_data or not image_type:
+            _log.error(f"Failed to fetch image data/type for {image_url}")
+            return False
+
+        try:
             if image_type == "png":
                 try:
-                    image_array = np.array(Image.open(io.BytesIO(image_data)))
+                    img_array = np.array(Image.open(io.BytesIO(image_data)))
                     with open(image_path, "wb") as fh:
-                        pymtpng.encode_png(image_array, fh, info=info)
-                except Exception as e:
-                    _log.error(f"Fishy PNG: {image_url}")
-                    with open(image_path, "wb") as fh:
+                        pymtpng.encode_png(img_array, fh, info=info)
+                    _log.info(f"Saved PNG w/ metadata: {image_path}")
+                except Exception as e_png:
+                    log_msg = (  # noqa: E501
+                        f"Could not process PNG w/ pymtpng (URL: {image_url}, "
+                        f"Path: {image_path}): {str(e_png)}. "  # noqa: E501
+                        "Writing raw bytes instead."
+                    )
+                    _log.warning(log_msg, exc_info=True)
+                    with open(image_path, "wb") as fh:  # Fallback
                         fh.write(image_data)
-            else:
+                    _log.info(f"Saved raw PNG data after error: {image_path}")
+            else:  # For non-PNG images (jpg, webp, etc.)
                 with open(image_path, "wb") as fh:
                     fh.write(image_data)
+                _log.info(f"Saved {image_type.upper()} image: {image_path}")
             return True
-        else:
+        except IOError as e_io:
+            _log.error(f"IOError writing to {image_path}: {str(e_io)}", exc_info=True)
+            return False
+        except Exception as e_general:
+            _log.error(
+                f"Unexpected error writing to {image_path}: {str(e_general)}",
+                exc_info=True,
+            )
             return False
 
     def download_missing(self):
         """
         Download missing images.
         """
+        if not self.jobs_upscale:
+            _log.info("No upscale jobs found to download.")
+            return
 
-        with tqdm(total=len(self.jobs_upscale), desc="Downloading") as pbar:
+        with tqdm(
+            total=len(self.jobs_upscale), desc="Downloading missing images"
+        ) as pbar:
             last_tick = 0
             for job_i, job in enumerate(self.jobs_upscale):
-                if not job.get("arch", False):
+                if job.get("arch", False):
+                    pbar.update(1)
+                    last_tick = job_i + 1
+                    continue
+
+                try:
+                    if not (job.get("enqueue_time") and job.get("image_paths")):
+                        job_id = job.get("id", "N/A")  # noqa: E231
+                        if not job.get("enqueue_time"):
+                            _log.warning(
+                                f"Skipping job {job_id} (missing enqueue_time)"
+                            )
+                        if not job.get("image_paths"):
+                            _log.warning(f"Skipping job {job_id} (missing image_paths)")
+                        pbar.update(1)
+                        last_tick = job_i + 1
+                        continue
+
                     dt_obj = dt.datetime.strptime(
                         job["enqueue_time"], Constants.date_format
                     )
@@ -417,31 +652,57 @@ class MidjourneyDownloader:
                     image_url = job["image_paths"][0]
 
                     job["arch_prompt_slug"] = slugify(prompt)[:49]
-                    path_base = (
-                        f"""{dt_stamp}_{job["arch_prompt_slug"]}_{job["id"][:4]}"""
-                    )
+                    path_base = f"{dt_stamp}_{job['arch_prompt_slug']}_{job['id'][:4]}"
                     path_ext = Path(urlparse(image_url).path).suffix[1:]
-                    image_path = Path(path_month, f"""{path_base}.{path_ext}""")
+                    image_path = path_month / f"{path_base}.{path_ext}"
                     info = {
-                        "Title": job.get("prompt", ""),
-                        "Author": job.get("username", ""),
-                        "Description": job.get("full_command", ""),
-                        "Copyright": job.get("username", ""),
+                        "Title": prompt,
+                        "Author": job.get("username", "Unknown"),
+                        "Description": job.get("full_command", prompt),
+                        "Copyright": job.get("username", "Unknown"),
                         "Creation Time": job.get("enqueue_time", ""),
-                        "Software": "Midjourney",
+                        "Software": "Midjourney via Dimjournal",
                     }
+
                     if self.fetch_and_write_image(image_url, image_path, info):
                         job["arch"] = True
                         job["arch_image_path"] = str(
                             image_path.relative_to(self.archive_folder)
                         )
-
-                        pbar.set_description(f"{job['arch_image_path']}")
-                        pbar.update(job_i + 1 - last_tick)
-                        last_tick = job_i + 1
-                        _log.debug(
-                            f"""Saving {job["arch_image_path"]} from {image_url}"""
+                        _log.info(f"Archived: {job['arch_image_path']}")
+                        pbar.set_description_str(
+                            f"Archived: {job['arch_image_path']}", refresh=True
                         )
+                    else:
+                        job_id = job.get("id", "N/A")
+                        _log.warning(
+                            f"Failed to archive for job {job_id} from {image_url}"
+                        )
+                        pbar.set_description_str(f"Failed: {job_id}", refresh=True)
+
+                except (
+                    dt.datetime.strptime
+                ) as e_date:  # Python 3.10 specific type hint for strptime
+                    job_id = job.get("id", "N/A")
+                    time_str = job.get("enqueue_time", "")
+                    _log.error(
+                        f"Date parse error for job {job_id} ('{time_str}'): {e_date}",
+                        exc_info=True,
+                    )
+                except KeyError as e_key:
+                    job_id = job.get("id", "N/A")
+                    _log.error(
+                        f"Missing key in job data for {job_id}: {e_key}", exc_info=True
+                    )
+                except Exception as e_loop:
+                    job_id = job.get("id", "N/A")
+                    _log.error(
+                        f"Unexpected error processing job {job_id}: {str(e_loop)}",
+                        exc_info=True,
+                    )
+                finally:
+                    pbar.update(job_i + 1 - last_tick)
+                    last_tick = job_i + 1
         self.save_jobs()
 
 
@@ -458,30 +719,81 @@ def download(
         user_id (Optional[str]): The user ID.
         limit (Optional[int]): The maximum number of pages to download.
     """
-    logging.basicConfig(level=logging.INFO)
+    # Configure logging at the beginning of the function or module
+    # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    # If logging is configured globally (e.g. in __main__ or __init__), this line might not be needed here.
+    # For now, assume it's handled globally or by the calling script.
     import os
 
-    pictures_folder = "My Pictures" if os.name == "nt" else "Pictures"
-    archive_folder = (
-        Path(archive_folder)
-        if archive_folder
-        else Path(os.path.expanduser("~"), pictures_folder, "midjourney", "dimjournal")
-    )
-    if not archive_folder.is_dir():
-        archive_folder.mkdir(parents=True)
-    _log.info(f"Data will be saved in: {archive_folder}")
-    options = webdriver.ChromeOptions()
-    driver = webdriver.Chrome(use_subprocess=True, options=options)
-    api = MidjourneyAPI(driver=driver, archive_folder=archive_folder)
+    # Determine default archive folder
+    if archive_folder is None:
+        pic_folder = "My Pictures" if os.name == "nt" else "Pictures"
+        default_base = Path(os.path.expanduser("~"), pic_folder, "midjourney")
+        archive_path = default_base / "dimjournal"
+    else:
+        archive_path = Path(archive_folder)
 
     try:
-        crawler = MidjourneyJobCrawler(api, archive_folder, job_type="upscale")
-        crawler.crawl(limit=limit)
-        crawler = MidjourneyJobCrawler(api, archive_folder, job_type=None)
-        crawler.crawl(limit=limit)
-        downloader = MidjourneyDownloader(api, archive_folder)
+        archive_path.mkdir(parents=True, exist_ok=True)
+        _log.info(f"Data will be saved in: {archive_path.resolve()}")
+    except OSError as e:
+        _log.error(
+            f"Could not create/access archive folder at "
+            f"{archive_path.resolve()}: {e}",
+            exc_info=True,
+        )
+        error_message = (  # noqa: E501
+            f"Error: Could not create/access archive folder at "
+            f"{archive_path.resolve()}.\nCheck permissions "
+            "or specify another folder."
+        )
+        print(error_message)
+        return
+
+    options = webdriver.ChromeOptions()
+    # Example options:
+    # options.add_argument('--headless')
+    # options.add_argument('--no-sandbox')
+    driver = None
+    try:
+        _log.info("Initializing WebDriver...")
+        driver = webdriver.Chrome(use_subprocess=True, options=options)
+        _log.info("WebDriver initialized.")
+
+        api = MidjourneyAPI(driver=driver, archive_folder=archive_path)
+        if not api.session_token:
+            _log.error("Midjourney login failed. Check credentials/network.")
+            print(
+                "Login to Midjourney failed. Ensure manual login works and try again."
+            )
+            return
+        if not api.user_id:
+            _log.error("Failed to retrieve User ID. Archiving may be incomplete.")
+            print("Could not retrieve User ID. Some features might be limited.")
+
+        _log.info("Starting crawl for 'upscale' jobs.")
+        upscale_crawler = MidjourneyJobCrawler(api, archive_path, job_type="upscale")
+        upscale_crawler.crawl(limit=limit)
+        _log.info("Finished crawl for 'upscale' jobs.")
+
+        _log.info("Starting crawl for all job types.")
+        all_jobs_crawler = MidjourneyJobCrawler(api, archive_path, job_type=None)
+        all_jobs_crawler.crawl(limit=limit)
+        _log.info("Finished crawl for all job types.")
+
+        _log.info("Starting download of missing images.")
+        downloader = MidjourneyDownloader(api, archive_path)
         downloader.download_missing()
+        _log.info("Finished downloading missing images.")
+
     except KeyboardInterrupt:
-        _log.warn("Caught KeyboardInterrupt")
+        _log.warning("Process interrupted by user.")
+        print("\nProcess interrupted by user.")
+    except Exception as e:
+        _log.critical(f"Critical error in download process: {str(e)}", exc_info=True)
+        print(f"A critical error occurred: {str(e)}")
     finally:
-        driver.quit()
+        if driver:
+            _log.info("Quitting WebDriver.")
+            driver.quit()
+        _log.info("Dimjournal process finished.")

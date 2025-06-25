@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
+# from pathlib import Path # Path was unused
 import fire
-from pathlib import Path
+
 from .dimjournal import download
 
 
