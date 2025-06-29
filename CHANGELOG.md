@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Simplified test suite:** Removed excessive mocking in favor of cleaner test structure (2025-06-25)
+- **Code cleanup:** Removed redundant error handling and simplified control flow in dimjournal.py
+- **Dependency management:** Streamlined imports and removed unnecessary complexity
+
+## [1.0.9] - 2025-06-25
+
 ### Added
 - Created `PLAN.md` to outline project tasks and strategy.
 - Created `TODO.md` to track pending tasks.

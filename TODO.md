@@ -1,34 +1,84 @@
 # TODO List
 
-This document tracks the tasks to be completed for the `dimjournal` project.
+## Critical Issues (Immediate)
+
+- [ ] Fix syntax error in `src/dimjournal/dimjournal.py` line 149 (missing try block)
+- [ ] Run tests to verify current functionality
+- [ ] Fix any failing tests after syntax error correction
+
+## High Priority (Next 1-2 weeks)
+
+### Code Quality
+- [ ] Refactor dimjournal.py into multiple modules:
+  - [ ] Create `api.py` for MidjourneyAPI class
+  - [ ] Create `crawler.py` for MidjourneyJobCrawler class
+  - [ ] Create `downloader.py` for MidjourneyDownloader class
+  - [ ] Create `constants.py` for Constants class
+  - [ ] Create `utils.py` for utility functions
+  - [ ] Create `exceptions.py` for custom exceptions
+
+### Error Handling
+- [ ] Implement custom exception hierarchy
+- [ ] Add retry logic with exponential backoff for network operations
+- [ ] Improve error messages for better user experience
+
+### Testing
+- [ ] Restore comprehensive test coverage (target >80%)
+- [ ] Add integration tests for main workflows
+- [ ] Set up coverage reporting
+
+## Medium Priority (Next month)
+
+### Type Safety
+- [ ] Add type hints to all functions and methods
+- [ ] Add py.typed marker file
+- [ ] Configure mypy and add to pre-commit hooks
+
+### Configuration
+- [ ] Implement configuration file support (YAML/TOML)
+- [ ] Add environment variable support
+- [ ] Make timeouts and retries configurable
+
+### CLI Improvements
+- [ ] Replace fire with click for better CLI
+- [ ] Add subcommands (download, config, test-auth, clean-cache)
+- [ ] Improve progress indicators and user feedback
+
+### Deployment
+- [ ] Create Dockerfile with Chrome pre-installed
+- [ ] Add docker-compose.yml
+- [ ] Document Docker deployment process
+- [ ] Add installation script for common platforms
+
+## Low Priority (Future enhancements)
+
+### Performance
+- [ ] Implement parallel image downloads
+- [ ] Add download resume capability
+- [ ] Optimize image processing pipeline
+- [ ] Add caching layer
+
+### Features
+- [ ] Export metadata to CSV/SQLite formats
+- [ ] Add web interface for browsing archives
+- [ ] Implement search functionality
+- [ ] Add batch operations support
+
+### Documentation
+- [ ] Generate API documentation with Sphinx
+- [ ] Create architecture diagrams
+- [ ] Write troubleshooting guide
+- [ ] Record setup video tutorials
+
+### Quality Assurance
+- [ ] Set up continuous deployment
+- [ ] Add performance benchmarks
+- [ ] Implement automated browser testing
+- [ ] Add security scanning
 
 ## Completed Tasks
 
--   [x] **Refine `dimjournal.py`:**
-    -   [x] Improve error handling (specific exceptions, detailed logging).
-    -   [ ] ~~Enhance configurability (timeouts, retries, etc.).~~ (Deferred)
-    -   [ ] ~~Modularize large functions.~~ (Partially addressed through clearer logic, further modularization deferred)
-    -   [x] Improve code comments and docstrings (implicitly done via logging and clearer code).
--   [x] **Update `README.md`:**
-    -   [x] Reflect changes in functionality/usage.
-    -   [x] Add a "Contributing" section.
--   [x] **Enhance build and CI/CD:**
-    -   [x] Review `pyproject.toml`, `setup.cfg`, `setup.py`.
-    -   [x] Update `.github/workflows/ci.yml` (linting, formatting checks, updated actions).
--   [x] **Write/Update Tests:**
-    -   [x] Improve `tests/test_dimjournal.py` with comprehensive mocked tests.
-    -   [x] Increase test coverage significantly.
--   [x] **Documentation:**
-    -   [x] Ensure `CHANGELOG.md` is up-to-date with all changes.
-    -   [x] Ensure `PLAN.md` and `TODO.md` are kept current.
-
-## Pending Tasks
-
--   [ ] **Refine `dimjournal.py` (Future Considerations):**
-    -   [ ] Enhance configurability (e.g., command-line options for timeouts, retries, browser options like headless).
-    -   [ ] Further modularize `download_missing` and other large methods in `dimjournal.py`.
-    -   [ ] Explicitly add/improve code comments and docstrings where logging is not self-explanatory.
--   [ ] **Final Checks:**
-    -   [ ] Run pre-commit hooks.
-    -   [ ] Run all tests (locally, though CI will also run them).
--   [ ] **Submit all changes.**
+- [x] Update CHANGELOG.md with recent changes
+- [x] Analyze codebase for improvement areas
+- [x] Create comprehensive improvement plan (PLAN.md)
+- [x] Create simplified TODO list (this file)
