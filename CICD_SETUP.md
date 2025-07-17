@@ -1,4 +1,29 @@
-# this_file: .github/workflows/ci.yml
+# CI/CD Setup Guide
+
+## Overview
+
+This guide explains how to set up the complete CI/CD pipeline for the dimjournal project, including the advanced workflow that couldn't be automatically committed due to GitHub App permissions.
+
+## Current Status
+
+✅ **Already Set Up:**
+- Git-tag-based semversioning with setuptools_scm
+- Comprehensive test suite
+- Build and release scripts
+- Basic GitHub Actions workflows
+
+⚠️ **Requires Manual Setup:**
+- Advanced CI/CD pipeline (due to GitHub App workflow permissions)
+- PyPI publishing secrets
+- Multi-platform binary builds
+
+## Manual CI/CD Pipeline Setup
+
+### 1. Complete CI/CD Workflow
+
+Create `.github/workflows/ci.yml` with the following content:
+
+```yaml
 name: CI/CD Pipeline
 
 on:
@@ -30,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Needed for setuptools_scm
+          fetch-depth: 0
       
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -89,7 +114,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Needed for setuptools_scm
+          fetch-depth: 0
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -131,7 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Needed for setuptools_scm
+          fetch-depth: 0
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -324,3 +349,83 @@ jobs:
           commit_message: 'docs: Update API documentation [skip ci]'
           file_pattern: 'API.md'
           commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
+```
+
+### 2. Required Secrets
+
+To enable PyPI publishing, add these secrets to your GitHub repository:
+
+1. Go to your repository on GitHub
+2. Navigate to Settings → Secrets and variables → Actions
+3. Add the following secrets:
+
+**PYPI_TOKEN**
+- Go to [PyPI](https://pypi.org/manage/account/token/)
+- Create a new API token
+- Copy the token and add it as a secret
+
+### 3. Optional: Codecov Integration
+
+For code coverage reporting:
+
+1. Go to [Codecov](https://codecov.io/)
+2. Connect your GitHub repository
+3. Add the `CODECOV_TOKEN` secret (if required)
+
+## Current Working Features
+
+Even without the advanced CI/CD pipeline, you have:
+
+### ✅ Local Development Tools
+```bash
+# All these work locally
+make test                    # Run tests
+make build                   # Build package
+make binary                  # Build binary
+make release VERSION=v1.0.0  # Create release
+```
+
+### ✅ Basic CI/CD
+- `build.yml`: Tests and builds on push/PR
+- `release.yml`: Creates GitHub releases on git tags
+
+### ✅ Git-Tag Versioning
+```bash
+# Create a release
+git tag v1.0.0
+git push origin v1.0.0
+# This will trigger the release workflow
+```
+
+## Manual Release Process
+
+Until the full CI/CD is set up, you can create releases manually:
+
+```bash
+# 1. Run tests locally
+make test
+
+# 2. Build package
+make build
+
+# 3. Create git tag
+git tag v1.0.0
+git push origin v1.0.0
+
+# 4. Upload to PyPI manually (if desired)
+pip install twine
+twine upload dist/*
+
+# 5. Create GitHub release manually
+# Go to GitHub → Releases → Create new release
+# Upload the files from dist/ folder
+```
+
+## Next Steps
+
+1. **Set up the complete CI/CD pipeline** by creating the workflow file manually
+2. **Add PyPI token** to enable automated publishing
+3. **Test the pipeline** by creating a test release
+4. **Monitor the builds** and adjust as needed
+
+The foundation is solid - you have all the tools and scripts needed for a robust development and release process!
