@@ -133,19 +133,20 @@ class MidjourneyAPI:
             return False
 
     def load_user_info(self):
-        self.user_info = {}
-        self.user_json = Path(self.archive_folder, Constants.user_json)
-        if self.user_json.is_file():
-            self.user_info = json.loads(self.user_json.read_text())
-            _log.info(f"Loaded user data from {self.user_json}")
-        else:
-            self.user_info = self.fetch_user_info()
-            if self.user_info:
-                self.user_json.write_text(json.dumps(self.user_info, indent=2))
-                _log.info(
-                    f"Saved newly fetched user info to {self.user_json} "
-                    "after JSON error."
-                )
+        try:
+            self.user_info = {}
+            self.user_json = Path(self.archive_folder, Constants.user_json)
+            if self.user_json.is_file():
+                self.user_info = json.loads(self.user_json.read_text())
+                _log.info(f"Loaded user data from {self.user_json}")
+            else:
+                self.user_info = self.fetch_user_info()
+                if self.user_info:
+                    self.user_json.write_text(json.dumps(self.user_info, indent=2))
+                    _log.info(
+                        f"Saved newly fetched user info to {self.user_json} "
+                        "after JSON error."
+                    )
         except Exception as e:
             _log.error(f"Unexpected error in load_user_info: {str(e)}", exc_info=True)
 
@@ -224,45 +225,52 @@ class MidjourneyAPI:
         Returns:
             List[dict]: A list of jobs.
         """
-        params = {}
-        if from_date:
-            pass  # params["fromDate"] = prev_day(from_date)
-        if page:
-            params["page"] = page
-        if job_type:
-            params["jobType"] = job_type
-        params["amount"] = amount
-        params["orderBy"] = "new"
-        params["jobStatus"] = "completed"
-        params["userId"] = self.user_id
-        params["dedupe"] = "true"
-        params["refreshApi"] = 0
+        try:
+            params = {}
+            if from_date:
+                pass  # params["fromDate"] = prev_day(from_date)
+            if page:
+                params["page"] = page
+            if job_type:
+                params["jobType"] = job_type
+            params["amount"] = amount
+            params["orderBy"] = "new"
+            params["jobStatus"] = "completed"
+            params["userId"] = self.user_id
+            params["dedupe"] = "true"
+            params["refreshApi"] = 0
 
-        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-        url = f"{Constants.api_url}?{query_string}"
+            query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+            url = f"{Constants.api_url}?{query_string}"
 
-        _log.debug(f"Requesting {url}")
-        self.driver.get(url)
-        soup = BeautifulSoup(self.driver.page_source, "html.parser")
-        pre_tag_contents = soup.find("pre").text
-        job_listing = json.loads(pre_tag_contents)
+            _log.debug(f"Requesting {url}")
+            self.driver.get(url)
+            soup = BeautifulSoup(self.driver.page_source, "html.parser")
+            pre_tag_contents = soup.find("pre").text
+            job_listing = json.loads(pre_tag_contents)
 
-        if isinstance(job_listing, list):
-            if len(job_listing) > 0 and isinstance(job_listing[0], dict):
-                if all(f in job_listing[0] for f in Constants.job_details):
-                    _log.debug(f"Got job listing with {len(job_listing)} jobs")
-                    return job_listing
-                if job_listing[0] == {"msg": "No jobs found."}:
+            if isinstance(job_listing, list):
+                if len(job_listing) > 0 and isinstance(job_listing[0], dict):
+                    if all(f in job_listing[0] for f in Constants.job_details):
+                        _log.debug(f"Got job listing with {len(job_listing)} jobs")
+                        return job_listing
+                    if job_listing[0] == {"msg": "No jobs found."}:
+                        _log.debug("Response: 'No jobs found'")
+                        return []
+                elif len(job_listing) == 0:
                     _log.debug("Response: 'No jobs found'")
                     return []
-            elif len(job_listing) == 0:
-                _log.debug("Response: 'No jobs found'")
-                return []
-            _log.error(
-                f"Unexpected job listing format. Expected list, got "
-                f"{type(job_listing)}. Content: {job_listing}"
-            )
-            raise ValueError(f"Unexpected job listing format: {job_listing}")
+                _log.error(
+                    f"Unexpected job listing format. Expected list, got "
+                    f"{type(job_listing)}. Content: {job_listing}"
+                )
+                raise ValueError(f"Unexpected job listing format: {job_listing}")
+            else:
+                _log.error(
+                    f"Unexpected job listing format. Expected list, got "
+                    f"{type(job_listing)}. Content: {job_listing}"
+                )
+                raise ValueError(f"Unexpected job listing format: {job_listing}")
         except json.JSONDecodeError as e:
             content_snippet = (
                 pre_tag_contents[:500] if "pre_tag_contents" in locals() else "N/A"
