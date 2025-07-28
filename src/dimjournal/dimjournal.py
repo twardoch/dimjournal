@@ -26,19 +26,25 @@ _log = logging.getLogger("dimjournal")
 
 
 class Constants:
-    date_format = "%Y-%m-%d %H:%M:%S.%f"
-    home_url = "https://www.midjourney.com/home/"
-    app_url = "https://www.midjourney.com/app/"
-    account_url = "https://www.midjourney.com/account/"
-    api_url = "https://www.midjourney.com/api/app/recent-jobs/"
-    session_token_cookie = "__Secure-next-auth.session-token"
-    app_element_id = "app-root"
-    account_element_id = "__NEXT_DATA__"
-    job_details = ["id", "enqueue_time", "prompt"]
-    user_json = Path("user.json")
-    jobs_upscaled_json = Path("jobs_upscaled.json")
-    cookies_pkl = Path("cookies.pkl")
-    mj_download_image_js = (
+    """
+    A class to hold various constant values used throughout the Dimjournal application.
+
+    These constants include URLs for Midjourney services, element IDs for web scraping,
+    file names for data storage, and JavaScript snippets for browser automation.
+    """
+    date_format: str = "%Y-%m-%d %H:%M:%S.%f"
+    home_url: str = "https://www.midjourney.com/home/"
+    app_url: str = "https://www.midjourney.com/app/"
+    account_url: str = "https://www.midjourney.com/account/"
+    api_url: str = "https://www.midjourney.com/api/app/recent-jobs/"
+    session_token_cookie: str = "__Secure-next-auth.session-token"
+    app_element_id: str = "app-root"
+    account_element_id: str = "__NEXT_DATA__"
+    job_details: list[str] = ["id", "enqueue_time", "prompt"]
+    user_json: Path = Path("user.json")
+    jobs_upscaled_json: Path = Path("jobs_upscaled.json")
+    cookies_pkl: Path = Path("cookies.pkl")
+    mj_download_image_js: str = (
         "var callback=arguments[arguments.length-1];"
         "function getDataUri(e,n){"
         'var a=new XMLHttpRequest;a.onload=function(){var e=new FileReader;e.onloadend=function(){n(e.result)},e.readAsDataURL(a.response)},a.open("GET",e),a.responseType="blob",a.send()'  # noqa: E501
@@ -86,18 +92,39 @@ class MidjourneyAPI:
         self.log_in()
         self.get_user_info()
 
-    def load_cookies(self):
-        self.cookies_path = Path(self.archive_folder, Constants.cookies_pkl)
+    def load_cookies(self) -> None:
+        """
+        Loads cookies from a pickle file and adds them to the WebDriver.
+        Cookies are used to maintain the user's session with Midjourney.
+        """
+        self.cookies_path: Path = Path(self.archive_folder, Constants.cookies_pkl)
         if self.cookies_path.is_file():
-            cookies = pickle.load(open(self.cookies_path, "rb"))
-            for cookie in cookies:
-                try:
-                    self.driver.add_cookie(cookie)
-                except InvalidCookieDomainException:
-                    pass
+            try:
+                cookies: list[dict] = pickle.load(open(self.cookies_path, "rb"))
+                for cookie in cookies:
+                    try:
+                        # Attempt to add each cookie to the driver
+                        self.driver.add_cookie(cookie)
+                    except InvalidCookieDomainException:
+                        # This exception can occur if the cookie's domain is not valid for the current URL.
+                        # It's often safe to ignore for session cookies that will be valid once the correct domain is navigated to.
+                        _log.debug(f"Invalid cookie domain for cookie: {cookie.get('name')}")
+                        pass
+            except Exception as e:
+                _log.error(f"Error loading cookies from {self.cookies_path}: {str(e)}", exc_info=True)
+        else:
+            _log.info(f"No cookies file found at {self.cookies_path}. A fresh login may be required.")
 
-    def save_cookies(self):
-        pickle.dump(self.driver.get_cookies(), open(self.cookies_path, "wb"))
+    def save_cookies(self) -> None:
+        """
+        Saves the current WebDriver cookies to a pickle file.
+        This preserves the session for future runs, avoiding repeated manual logins.
+        """
+        try:
+            pickle.dump(self.driver.get_cookies(), open(self.cookies_path, "wb"))
+            _log.info(f"Cookies saved to {self.cookies_path}")
+        except Exception as e:
+            _log.error(f"Error saving cookies to {self.cookies_path}: {str(e)}", exc_info=True)
 
     def log_in(self) -> bool:
         """
@@ -132,28 +159,62 @@ class MidjourneyAPI:
             _log.error(f"Unexpected error during login: {str(e)}", exc_info=True)
             return False
 
-    def load_user_info(self):
-        try:
-            self.user_info = {}
-            self.user_json = Path(self.archive_folder, Constants.user_json)
-            if self.user_json.is_file():
+    def load_user_info(self) -> None:
+        """
+        Loads user information from a local JSON file if it exists,
+        otherwise fetches it from Midjourney and saves it.
+        """
+        self.user_info: dict = {}
+        self.user_json: Path = Path(self.archive_folder, Constants.user_json)
+        if self.user_json.is_file():
+            try:
                 self.user_info = json.loads(self.user_json.read_text())
                 _log.info(f"Loaded user data from {self.user_json}")
-            else:
+            except json.JSONDecodeError as e:
+                _log.error(
+                    f"Error decoding user info JSON from {self.user_json}: {str(e)}. "
+                    "Attempting to re-fetch.",
+                    exc_info=True,
+                )
                 self.user_info = self.fetch_user_info()
                 if self.user_info:
                     self.user_json.write_text(json.dumps(self.user_info, indent=2))
-                    _log.info(
-                        f"Saved newly fetched user info to {self.user_json} "
-                        "after JSON error."
+                    _log.info(f"Saved newly fetched user info to {self.user_json}")
+            except Exception as e:
+                _log.error(
+                    f"Unexpected error loading user info from {self.user_json}: {str(e)}",
+                    exc_info=True,
+                )
+        else:
+            _log.info(f"User info file not found at {self.user_json}. Fetching new data.")
+            self.user_info = self.fetch_user_info()
+            if self.user_info:
+                try:
+                    self.user_json.write_text(json.dumps(self.user_info, indent=2))
+                    _log.info(f"Saved newly fetched user info to {self.user_json}")
+                except IOError as e:
+                    _log.error(
+                        f"Error writing user info to {self.user_json}: {str(e)}",
+                        exc_info=True,
                     )
-        except Exception as e:
-            _log.error(f"Unexpected error in load_user_info: {str(e)}", exc_info=True)
+            else:
+                _log.warning("Failed to fetch user info. User ID may not be available.")
 
-    def fetch_user_info(self):
+    def fetch_user_info(self) -> dict | None:
+        """
+        Navigates to the Midjourney account page and extracts user information
+        from the embedded JSON data.
+
+        This method uses BeautifulSoup to parse the HTML and locate the script tag
+        containing the user data. It handles potential timeouts and JSON decoding errors.
+
+        Returns:
+            dict | None: A dictionary containing user information if successful, otherwise None.
+        """
         try:
             _log.info(f"Fetching user info from {Constants.account_url}")
             self.driver.get(Constants.account_url)
+            # Wait for the specific script element to be present on the page
             WebDriverWait(self.driver, 60 * 10).until(
                 EC.presence_of_element_located((By.ID, Constants.account_element_id))
             )
@@ -169,7 +230,7 @@ class MidjourneyAPI:
                 )
                 return None
             script_tag_contents = script_tag.text
-            user_data = json.loads(script_tag_contents)
+            user_data: dict = json.loads(script_tag_contents)
             _log.info("Successfully fetched and parsed user info.")
             return user_data
         except TimeoutException:
@@ -188,7 +249,18 @@ class MidjourneyAPI:
             return None
 
     def get_user_info(self) -> bool:
+        """
+        Retrieves the user ID from the loaded user information.
+
+        This method assumes `load_user_info` has already been called and populated
+        `self.user_info`. It navigates through the nested dictionary structure
+        to extract the user's ID.
+
+        Returns:
+            bool: True if the user ID is successfully obtained, False otherwise.
+        """
         self.load_user_info()
+        # Check for the presence of nested keys to safely access the user ID
         if (
             self.user_info
             and "props" in self.user_info
@@ -196,7 +268,7 @@ class MidjourneyAPI:
             and "user" in self.user_info["props"]["pageProps"]
             and "id" in self.user_info["props"]["pageProps"]["user"]
         ):
-            self.user_id = self.user_info["props"]["pageProps"]["user"]["id"]
+            self.user_id: str = self.user_info["props"]["pageProps"]["user"]["id"]
             _log.info(f"User ID {self.user_id} obtained from user info.")
             return True
         else:

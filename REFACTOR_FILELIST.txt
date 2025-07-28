@@ -1,0 +1,10 @@
+44	./llms.txt
+32	./src/dimjournal/dimjournal.py
+31	./dimjournal/_previous/dimjournal.py
+16	./dimjournal/_previous/test_dimjournal.py
+15	./README.md
+11	./LICENSE.txt
+7	./PLAN.md
+3	./CHANGELOG.md
+3	./tox.ini
+3	./TODO.md
