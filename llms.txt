@@ -1,711 +1,51 @@
-This file is a merged representation of the entire codebase, combined into a single document by Repomix.
-
-<file_summary>
-This section contains a summary of this file.
-
-<purpose>
-This file contains a packed representation of the entire repository's contents.
-It is designed to be easily consumable by AI systems for analysis, code review,
-or other automated processes.
-</purpose>
-
-<file_format>
-The content is organized as follows:
-1. This summary section
-2. Repository information
-3. Directory structure
-4. Repository files (if enabled)
-5. Multiple file entries, each consisting of:
-  - File path as an attribute
-  - Full contents of the file
-</file_format>
-
-<usage_guidelines>
-- This file should be treated as read-only. Any changes should be made to the
-  original repository files, not this packed version.
-- When processing this file, use the file path to distinguish
-  between different files in the repository.
-- Be aware that this file may contain sensitive information. Handle it with
-  the same level of security as you would the original repository.
-</usage_guidelines>
-
-<notes>
-- Some files may have been excluded based on .gitignore rules and Repomix's configuration
-- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Files matching patterns in .gitignore are excluded
-- Files matching default ignore patterns are excluded
-- Files are sorted by Git change count (files with more changes are at the bottom)
-</notes>
-
-</file_summary>
-
-<directory_structure>
-.github/
-  workflows/
-    ci.yml
-src/
-  dimjournal/
-    __init__.py
-    __main__.py
-    dimjournal.py
-tests/
-  conftest.py
-  test_dimjournal.py
-.coveragerc
-.gitignore
-.isort.cfg
-.pre-commit-config.yaml
-AUTHORS.md
-LICENSE.txt
-pyproject.toml
-README.md
-setup.cfg
-setup.py
-tox.ini
-</directory_structure>
-
-<files>
-This section contains the contents of the repository's files.
-
-<file path=".github/workflows/ci.yml">
-name: Test, Build, and Publish
-
-on:
-  push:
-    branches: [main]
-    tags: ['v[0-9]*', '[0-9]+.[0-9]+*']
-  pull_request:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 0 1,16 * *'
-
-permissions:
-  contents: write
-
-concurrency:
-  group: >-
-    ${{ github.workflow }}-${{ github.ref_type }}- ${{ github.event.pull_request.number || github.sha }}
-
-
-  cancel-in-progress: true
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.10'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest
-          pip install -e .
-      - name: Run tests
-        run: pytest
-
-  update-docs:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          ref: ${{ github.head_ref }}
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.10'
-      - name: Install pydoc-markdown
-        run: pip install pydoc-markdown
-      - name: Generate API documentation
-        run: pydoc-markdown > API.md
-      - name: Commit and push if it's changed
-        uses: EndBug/add-and-commit@v9
-        with:
-          message: 'Update API documentation'
-          add: 'API.md'
-
-  build-and-publish:
-    needs: test
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.10'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install build
-      - name: Build distribution
-        run: python -m build
-      - name: Publish to PyPi
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_TOKEN }}
-</file>
-
-<file path="src/dimjournal/__init__.py">
-import sys
-from .dimjournal import download
-
-if sys.version_info[:2] >= (3, 8):
-    # TODO: Import directly (no need for conditional) when `python_requires = >= 3.8`
-    from importlib.metadata import PackageNotFoundError, version  # pragma: no cover
-else:
-    from importlib_metadata import PackageNotFoundError, version  # pragma: no cover
-
-try:
-    # Change here if project is renamed and does not equal the package name
-    dist_name = __name__
-    __version__ = version(dist_name)
-except PackageNotFoundError:  # pragma: no cover
-    __version__ = "unknown"
-finally:
-    del version, PackageNotFoundError
-</file>
-
-<file path="src/dimjournal/__main__.py">
-#!/usr/bin/env python3
-
-import fire
-from pathlib import Path
-from .dimjournal import download
-
-
-def cli():
-    fire.core.Display = lambda lines, out: print(*lines, file=out)
-    fire.Fire(download)
-
-
-if __name__ == "__main__":
-    cli()
-</file>
-
-<file path="src/dimjournal/dimjournal.py">
-#!/usr/bin/env python3
-
-import base64
-import datetime as dt
-import io
-import itertools
-import json
-import logging
-import pickle
-from pathlib import Path
-from typing import List
-from urllib.parse import urlparse
-
-import numpy as np
-import pymtpng
-import undetected_chromedriver as webdriver
-from bs4 import BeautifulSoup
-from PIL import Image
-from selenium.common.exceptions import InvalidCookieDomainException
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from slugify import slugify
-from tqdm import tqdm
-
-_log = logging.getLogger("dimjournal")
-
-
-class Constants:
-    date_format = "%Y-%m-%d %H:%M:%S.%f"
-    home_url = "https://www.midjourney.com/home/"
-    app_url = "https://www.midjourney.com/app/"
-    account_url = "https://www.midjourney.com/account/"
-    api_url = "https://www.midjourney.com/api/app/recent-jobs/"
-    session_token_cookie = "__Secure-next-auth.session-token"
-    app_element_id = "app-root"
-    account_element_id = "__NEXT_DATA__"
-    job_details = ["id", "enqueue_time", "prompt"]
-    user_json = Path("user.json")
-    jobs_upscaled_json = Path("jobs_upscaled.json")
-    cookies_pkl = Path("cookies.pkl")
-    mj_download_image_js = """var callback=arguments[arguments.length-1];function getDataUri(e,n){var a=new XMLHttpRequest;a.onload=function(){var e=new FileReader;e.onloadend=function(){n(e.result)},e.readAsDataURL(a.response)},a.open("GET",e),a.responseType="blob",a.send()}getDataUri(document.querySelector("img").src,function(e){callback(e)});"""
-
-
-def get_date_ninety_days_prior(date_string: str) -> str:
-    """
-    Get the date 90 days prior to the given date.
-
-    Args:
-        date_string (str): The date string in the format "%Y-%m-%d %H:%M:%S.%f".
-
-    Returns:
-        str: The date string 90 days prior to the given date.
-    """
-    DAYS_PRIOR = 90
-    date_obj = dt.datetime.strptime(date_string, Constants.date_format)
-    prev_day_obj = date_obj - dt.timedelta(days=DAYS_PRIOR)
-    prev_day_string = prev_day_obj.strftime(Constants.date_format)
-    return prev_day_string
-
-
-class MidjourneyAPI:
-    """
-    A class to interact with the Midjourney API.
-
-    Attributes:
-        archive_folder (Path): The path to the archive folder.
-        driver (webdriver.Chrome): The Chrome driver.
-    """
-
-    def __init__(self, driver: webdriver.Chrome, archive_folder: Path | str) -> None:
-        """
-        The constructor for the MidjourneyAPI class.
-
-        Args:
-            driver (webdriver.Chrome): The Chrome driver.
-            archive_folder (Path | str): The path to the archive folder.
-        """
-        self.archive_folder = Path(archive_folder)
-        self.driver = driver
-        self.log_in()
-        self.get_user_info()
-
-    def log_in(self) -> bool:
-        """
-        Log in to the Midjourney API.
-
-        Returns:
-            bool: True if login is successful, False otherwise.
-        """
-
-    def load_cookies(self):
-        self.cookies_path = Path(self.archive_folder, Constants.cookies_pkl)
-        if self.cookies_path.is_file():
-            cookies = pickle.load(open(self.cookies_path, "rb"))
-            for cookie in cookies:
-                try:
-                    self.driver.add_cookie(cookie)
-                except InvalidCookieDomainException:
-                    pass
-
-    def save_cookies(self):
-        pickle.dump(self.driver.get_cookies(), open(self.cookies_path, "wb"))
-
-    def log_in(self) -> bool:
-        """
-        Log in to the Midjourney API.
-
-        Returns:
-            bool: True if login is successful, False otherwise.
-        """
-        self.load_cookies()
-        try:
-            self.driver.get(Constants.home_url)
-            WebDriverWait(self.driver, 60 * 10).until(EC.url_to_be(Constants.app_url))
-            WebDriverWait(self.driver, 60 * 10).until(
-                EC.presence_of_element_located((By.ID, Constants.app_element_id))
-            )
-            cookie = self.driver.get_cookie(Constants.session_token_cookie)
-            if cookie is not None:
-                self.save_cookies()
-                self.session_token = cookie["value"]
-                return True
-            else:
-                return False
-        except Exception as e:
-            _log.error(f"Failed to get session token: {str(e)}")
-            return False
-
-    def load_user_info(self):
-        self.user_info = {}
-        self.user_json = Path(self.archive_folder, Constants.user_json)
-        if self.user_json.is_file():
-            self.user_info = json.loads(self.user_json.read_text())
-        else:
-            self.user_info = self.fetch_user_info()
-            if self.user_info:
-                self.user_json.write_text(json.dumps(self.user_info))
-
-    def fetch_user_info(self):
-        try:
-            self.driver.get(Constants.account_url)
-            WebDriverWait(self.driver, 60 * 10).until(
-                EC.presence_of_element_located((By.ID, Constants.account_element_id))
-            )
-            soup = BeautifulSoup(self.driver.page_source, "html.parser")
-            script_tag_contents = soup.find(
-                "script", id=Constants.account_element_id
-            ).text
-            return json.loads(script_tag_contents)
-        except Exception as e:
-            _log.error(f"Failed to get user info: {str(e)}")
-            return None
-
-    def get_user_info(self) -> bool:
-        self.load_user_info()
-        if self.user_info:
-            self.user_id = self.user_info["props"]["pageProps"]["user"]["id"]
-            return True
-        else:
-            return False
-
-    def request_recent_jobs(
-        self,
-        from_date: str | None = None,
-        page: int | None = None,
-        job_type: str | None = None,
-        amount: int = 50,
-    ) -> List[dict]:
-        """
-        Request recent jobs from the Midjourney API.
-
-        Args:
-            from_date (str | None): The date from which to request jobs.
-            page (int | None): The page number to request.
-            job_type (str | None): The type of job to request.
-            amount (int): The number of jobs to request.
-
-        Returns:
-            List[dict]: A list of jobs.
-        """
-        params = {}
-        if from_date:
-            pass  # params["fromDate"] = prev_day(from_date)
-        if page:
-            params["page"] = page
-        if job_type:
-            params["jobType"] = job_type
-        params["amount"] = amount
-        params["orderBy"] = "new"
-        params["jobStatus"] = "completed"
-        params["userId"] = self.user_id
-        params["dedupe"] = "true"
-        params["refreshApi"] = 0
-
-        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-        url = f"{Constants.api_url}?{query_string}"
-
-        _log.debug(f"Requesting {url}")
-        self.driver.get(url)
-        soup = BeautifulSoup(self.driver.page_source, "html.parser")
-        pre_tag_contents = soup.find("pre").text
-        job_listing = json.loads(pre_tag_contents)
-
-        if isinstance(job_listing, list):
-            if len(job_listing) > 0 and isinstance(job_listing[0], dict):
-                if all(f in job_listing[0] for f in Constants.job_details):
-                    _log.debug(f"Got job listing with {len(job_listing)} jobs")
-                    return job_listing
-                if job_listing[0] == {"msg": "No jobs found."}:
-                    _log.debug(f"Response: 'No jobs found'")
-                    return []
-            elif len(job_listing) == 0:
-                _log.debug(f"Response: 'No jobs found'")
-                return []
-        raise ValueError(job_listing)
-
-
-class MidjourneyJobCrawler:
-    def __init__(
-        self, api: MidjourneyAPI, archive_folder: Path, job_type: str | None = None
-    ):
-        """
-        The constructor for the MidjourneyJobCrawler class.
-
-        Args:
-            api (MidjourneyAPI): The Midjourney API.
-            archive_folder (Path): The path to the archive folder.
-            job_type (Optional[str]): The type of job to crawl.
-        """
-        self.api = api
-        self.job_type = job_type
-        self.archive_folder = archive_folder
-        if job_type:
-            self.archive_file = Path(f"jobs_{job_type}.json")
-        else:
-            self.archive_file = Path("jobs.json")
-        self.archive_file = self.archive_folder / self.archive_file
-        self.archive_data = []
-
-    def load_archive_data(self):
-        """
-        Load the archive data.
-        """
-        if self.archive_file.is_file():
-            self.archive_data = json.loads(self.archive_file.read_text())
-        else:
-            self.archive_data = []
-
-    def update_archive_data(self, job_listing: List[dict]):
-        """
-        Update the archive data with the given job listing.
-
-        Args:
-            job_listing (List[dict]): The job listing.
-
-        Returns:
-            bool: True if the archive data was updated, False otherwise.
-        """
-        new_entries = [
-            job
-            for job in job_listing
-            if job["id"] not in [x["id"] for x in self.archive_data]
-        ]
-        if new_entries:
-            self.archive_data.extend(new_entries)
-            self.archive_file.write_text(json.dumps(self.archive_data, indent=2))
-        else:
-            return False
-        return True
-
-    def crawl(
-        self,
-        limit: int | None = None,
-        from_date: str | None = None,
-    ):
-        """
-        Crawl the Midjourney API for job listings.
-
-        Args:
-            limit (Optional[int]): The maximum number of pages to crawl.
-            from_date (Optional[str]): The date from which to start crawling.
-        """
-        job_str = self.job_type if self.job_type else "all"
-        self.load_archive_data()
-        pages = range(1, limit + 1) if limit else itertools.count(1)
-        for page in tqdm(pages, desc=f"Crawling for {job_str} job info"):
-            job_listing = self.api.request_recent_jobs(
-                from_date=from_date, page=page, job_type=self.job_type
-            )
-            if not job_listing:
-                _log.debug(
-                    f"Empty {job_str} job listing batch: reached end of total job listing"
-                )
-                break
-            if not self.update_archive_data(job_listing):
-                _log.debug(f"No new {job_str} jobs found: stopping crawler")
-                break
-            if from_date is None:
-                from_date = job_listing[0]["enqueue_time"]
-
-
-class MidjourneyDownloader:
-    def __init__(self, api, archive_folder):
-        """
-        The constructor for the MidjourneyDownloader class.
-
-        Args:
-            api (MidjourneyAPI): The Midjourney API.
-            archive_folder (Path): The path to the archive folder.
-        """
-        self.api = api
-        self.archive_folder = Path(archive_folder)
-        self.archive_folder.mkdir(parents=True, exist_ok=True)
-        self.jobs_json_path = Path(self.archive_folder, "jobs_upscale.json")
-        self.jobs_upscale = self.read_jobs()
-
-    def fetch_image(self, url):
-        """
-        Fetch an image from the given URL.
-
-        Args:
-            url (str): The URL of the image.
-
-        Returns:
-            Tuple[bytes, str]: The image data and the image type.
-        """
-        self.api.driver.get(url)
-        data_uri = self.api.driver.execute_async_script(Constants.mj_download_image_js)
-        header, encoded = data_uri.split(",", 1)
-        image_type = header.split(";")[0].split("/")[-1]
-        image_data = base64.b64decode(encoded)
-        return image_data, image_type
-
-    def read_jobs(self):
-        """
-        Read the job listings.
-
-        Returns:
-            List[dict]: The job listings.
-        """
-        with open(self.jobs_json_path, "r") as file:
-            return json.load(file)
-
-    def save_jobs(self):
-        """
-        Save the job listings.
-        """
-        with open(self.jobs_json_path, "w") as file:
-            json.dump(self.jobs_upscale, file, indent=2)
-        _log.debug(f"Updated {self.jobs_json_path}")
-
-    def create_folders(self, dt_obj):
-        """
-        Create folders for the given date.
-
-        Args:
-            dt_obj (datetime): The date.
-
-        Returns:
-            Path: The path to the created folder.
-        """
-        dt_year = f"{dt_obj.year}"
-        path_year = Path(self.archive_folder, dt_year)
-        path_year.mkdir(parents=True, exist_ok=True)
-        month = f"{dt_obj.month:02}"
-        path_month = Path(path_year, month)
-        path_month.mkdir(parents=True, exist_ok=True)
-        return path_month
-
-    def fetch_and_write_image(self, image_url, image_path, info):
-        """
-        Fetch an image from the given URL and write it to the given path.
-
-        Args:
-            image_url (str): The URL of the image.
-            image_path (Path): The path to write the image.
-            info (dict): The metadata of the image.
-
-        Returns:
-            bool: True if the image was successfully fetched and written, False otherwise.
-        """
-        if not image_path.is_file():
-            image_data, image_type = self.fetch_image(image_url)
-            if image_type == "png":
-                try:
-                    image_array = np.array(Image.open(io.BytesIO(image_data)))
-                    with open(image_path, "wb") as fh:
-                        pymtpng.encode_png(image_array, fh, info=info)
-                except Exception as e:
-                    _log.error(f"Fishy PNG: {image_url}")
-                    with open(image_path, "wb") as fh:
-                        fh.write(image_data)
-            else:
-                with open(image_path, "wb") as fh:
-                    fh.write(image_data)
-            return True
-        else:
-            return False
-
-    def download_missing(self):
-        """
-        Download missing images.
-        """
-
-        with tqdm(total=len(self.jobs_upscale), desc="Downloading") as pbar:
-            last_tick = 0
-            for job_i, job in enumerate(self.jobs_upscale):
-                if not job.get("arch", False):
-                    dt_obj = dt.datetime.strptime(
-                        job["enqueue_time"], Constants.date_format
-                    )
-                    path_month = self.create_folders(dt_obj)
-
-                    dt_stamp = dt_obj.strftime("%Y%m%d-%H%M")
-                    prompt = job.get("prompt", "") or job.get("full_command", "") or ""
-                    image_url = job["image_paths"][0]
-
-                    job["arch_prompt_slug"] = slugify(prompt)[:49]
-                    path_base = (
-                        f"""{dt_stamp}_{job["arch_prompt_slug"]}_{job["id"][:4]}"""
-                    )
-                    path_ext = Path(urlparse(image_url).path).suffix[1:]
-                    image_path = Path(path_month, f"""{path_base}.{path_ext}""")
-                    info = {
-                        "Title": job.get("prompt", ""),
-                        "Author": job.get("username", ""),
-                        "Description": job.get("full_command", ""),
-                        "Copyright": job.get("username", ""),
-                        "Creation Time": job.get("enqueue_time", ""),
-                        "Software": "Midjourney",
-                    }
-                    if self.fetch_and_write_image(image_url, image_path, info):
-                        job["arch"] = True
-                        job["arch_image_path"] = str(
-                            image_path.relative_to(self.archive_folder)
-                        )
-
-                        pbar.set_description(f"{job['arch_image_path']}")
-                        pbar.update(job_i + 1 - last_tick)
-                        last_tick = job_i + 1
-                        _log.debug(
-                            f"""Saving {job["arch_image_path"]} from {image_url}"""
-                        )
-        self.save_jobs()
-
-
-def download(
-    archive_folder: Path | str | None = None,
-    user_id: str | None = None,
-    limit: int | None = None,
-):
-    """
-    Download images from the Midjourney API.
-
-    Args:
-        archive_folder (Optional[Union[Path, str]]): The path to the archive folder.
-        user_id (Optional[str]): The user ID.
-        limit (Optional[int]): The maximum number of pages to download.
-    """
-    logging.basicConfig(level=logging.INFO)
-    import os
-
-    pictures_folder = "My Pictures" if os.name == "nt" else "Pictures"
-    archive_folder = (
-        Path(archive_folder)
-        if archive_folder
-        else Path(os.path.expanduser("~"), pictures_folder, "midjourney", "dimjournal")
-    )
-    if not archive_folder.is_dir():
-        archive_folder.mkdir(parents=True)
-    _log.info(f"Data will be saved in: {archive_folder}")
-    options = webdriver.ChromeOptions()
-    driver = webdriver.Chrome(use_subprocess=True, options=options)
-    api = MidjourneyAPI(driver=driver, archive_folder=archive_folder)
-
-    try:
-        crawler = MidjourneyJobCrawler(api, archive_folder, job_type="upscale")
-        crawler.crawl(limit=limit)
-        crawler = MidjourneyJobCrawler(api, archive_folder, job_type=None)
-        crawler.crawl(limit=limit)
-        downloader = MidjourneyDownloader(api, archive_folder)
-        downloader.download_missing()
-    except KeyboardInterrupt:
-        _log.warn("Caught KeyboardInterrupt")
-    finally:
-        driver.quit()
-</file>
-
-<file path="tests/conftest.py">
-"""
-    Dummy conftest.py for dimjournal.
-
-    If you don't know what this is for, just leave it empty.
-    Read more about conftest.py under:
-    - https://docs.pytest.org/en/stable/fixture.html
-    - https://docs.pytest.org/en/stable/writing_plugins.html
-"""
-
-# import pytest
-</file>
-
-<file path="tests/test_dimjournal.py">
-import pytest
-from dimjournal.dimjournal import (
-    MidjourneyAPI,
-    MidjourneyJobCrawler,
-    MidjourneyDownloader,
-)
-from pathlib import Path
-import undetected_chromedriver as webdriver
-
-
-def test():
-    assert True
-</file>
-
-<file path=".coveragerc">
+Project Structure:
+📁 dimjournal
+├── 📁 dimjournal
+│   ├── 📁 _previous
+│   │   ├── 📄 __init__.py
+│   │   ├── 📄 conftest.py
+│   │   ├── 📄 dimjournal.py
+│   │   ├── 📄 setup.py
+│   │   └── 📄 test_dimjournal.py
+│   └── 📄 _previous_TODO.md
+├── 📁 scripts
+│   ├── 📄 build.py
+│   ├── 📄 release.py
+│   ├── 📄 test.py
+│   └── 📄 validate.py
+├── 📁 src
+│   ├── 📁 dimjournal
+│   │   ├── 📄 __init__.py
+│   │   ├── 📄 __main__.py
+│   │   └── 📄 dimjournal.py
+│   └── 📁 dimjournal.egg-info
+├── 📁 tests
+│   ├── 📄 conftest.py
+│   └── 📄 test_dimjournal.py
+├── 📄 .gitignore
+├── 📄 AUTHORS.md
+├── 📄 build-and-test.sh
+├── 📄 CHANGELOG.md
+├── 📄 CICD_SETUP.md
+├── 📄 INSTALLATION.md
+├── 📄 LICENSE.txt
+├── 📄 Makefile
+├── 📄 PLAN.md
+├── 📄 pyproject.toml
+├── 📄 README.md
+├── 📄 REFACTOR_FILELIST.txt
+├── 📄 REFACTOR_SPLITTING.md
+├── 📄 setup.cfg
+├── 📄 setup.py
+├── 📄 TODO.md
+├── 📄 tox.ini
+└── 📄 WORKFLOWS_TEMPLATES.md
+
+
+<documents>
+<document index="1">
+<source>.coveragerc</source>
+<document_content>
 # .coveragerc to control coverage.py
 [run]
 branch = True
@@ -734,9 +74,13 @@ exclude_lines =
     # Don't complain if non-runnable code isn't run:
     if 0:
     if __name__ == .__main__.:
-</file>
 
-<file path=".gitignore">
+</document_content>
+</document>
+
+<document index="2">
+<source>.gitignore</source>
+<document_content>
 .aider*
 # Temporary and binary files
 *~
@@ -792,15 +136,23 @@ MANIFEST
 .venv*/
 .conda*/
 .python-version
-</file>
 
-<file path=".isort.cfg">
+</document_content>
+</document>
+
+<document index="3">
+<source>.isort.cfg</source>
+<document_content>
 [settings]
 profile = black
 known_first_party = dimjournal
-</file>
 
-<file path=".pre-commit-config.yaml">
+</document_content>
+</document>
+
+<document index="4">
+<source>.pre-commit-config.yaml</source>
+<document_content>
 exclude: '^docs/conf.py'
 
 repos:
@@ -868,16 +220,791 @@ repos:
 #   rev: v2.2.4
 #   hooks:
 #   - id: codespell
-</file>
 
-<file path="AUTHORS.md">
+</document_content>
+</document>
+
+<document index="5">
+<source>AUTHORS.md</source>
+<document_content>
 # Contributors
 
 * Adam Twardoch <adam+github@twardoch.com>
-</file>
 
-<file path="LICENSE.txt">
-Apache License
+</document_content>
+</document>
+
+<document index="6">
+<source>CHANGELOG.md</source>
+<document_content>
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+- **Simplified test suite:** Removed excessive mocking in favor of cleaner test structure (2025-06-25)
+- **Code cleanup:** Removed redundant error handling and simplified control flow in dimjournal.py
+- **Dependency management:** Streamlined imports and removed unnecessary complexity
+
+## [1.0.9] - 2025-06-25
+
+### Added
+- Created `PLAN.md` to outline project tasks and strategy.
+- Created `TODO.md` to track pending tasks.
+- Created `CHANGELOG.md` (this file) to document project changes.
+- **Error Handling & Logging:** Significantly improved error handling across `dimjournal.py` with more specific exceptions, detailed logging messages (including `exc_info=True` for exceptions), and checks for common failure points (e.g., missing elements, network issues, file I/O problems).
+- **README Enhancements:**
+    - Added a "Features" section.
+    - Included a "Disclaimer" regarding Midjourney's ToS.
+    - Added prerequisites to the "Installation" section.
+    - Updated CLI examples.
+    - Provided a more detailed Python usage example including logging.
+    - Added a "Contributing" section with guidelines.
+- **Build & CI/CD:**
+    - Updated GitHub Actions workflow (`.github/workflows/ci.yml`) to use newer versions of `actions/checkout` (v4) and `actions/setup-python` (v5).
+    - Added a linting step with `flake8` to the CI workflow.
+    - Ensured Python 3.10+ consistency for version-dependent imports (`importlib.metadata`).
+- **Testing:**
+    - Added a comprehensive test suite in `tests/test_dimjournal.py`.
+    - Implemented tests for utility functions (`get_date_ninety_days_prior`).
+    - Added mocked tests for `MidjourneyAPI` (login, user info fetching, job requests).
+    - Added mocked tests for `MidjourneyJobCrawler` (archive loading, data updates, crawl logic).
+    - Added mocked tests for `MidjourneyDownloader` (job reading, folder creation, image fetching/writing, download loop).
+    - Used `pytest-mock` and `tmp_path` fixtures for effective testing.
+
+### Changed
+- **Code Refinements in `dimjournal.py`:**
+    - Improved robustness of login sequence, user info parsing, and API request handling.
+    - Enhanced file operations (reading/writing JSON, creating folders) with better error catching.
+    - Made image downloading logic more resilient, including fallback for PNG metadata processing.
+    - Refined logging messages to be more informative.
+- **`src/dimjournal/__init__.py`:** Simplified `importlib.metadata` import for Python 3.10+ and set `dist_name` explicitly to `dimjournal`.
+- Default archive path in `download()` function now uses a base `midjourney` folder under user's Pictures, then `dimjournal` (e.g., `~/Pictures/midjourney/dimjournal`).
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+</document_content>
+</document>
+
+<document index="7">
+<source>CICD_SETUP.md</source>
+<document_content>
+# CI/CD Setup Guide
+
+## Overview
+
+This guide explains how to set up the complete CI/CD pipeline for the dimjournal project, including the advanced workflow that couldn't be automatically committed due to GitHub App permissions.
+
+## Current Status
+
+✅ **Already Set Up:**
+- Git-tag-based semversioning with setuptools_scm
+- Comprehensive test suite
+- Build and release scripts
+- Basic GitHub Actions workflows
+
+⚠️ **Requires Manual Setup:**
+- Advanced CI/CD pipeline (due to GitHub App workflow permissions)
+- PyPI publishing secrets
+- Multi-platform binary builds
+
+## Manual CI/CD Pipeline Setup
+
+### 1. Complete CI/CD Workflow
+
+Create `.github/workflows/ci.yml` with the following content:
+
+```yaml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ github.ref_type }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }} with Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.10', '3.11', '3.12']
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install Chrome (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+      
+      - name: Install Chrome (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install --cask google-chrome
+      
+      - name: Install Chrome (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install googlechrome
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[testing]
+          pip install flake8 black isort pytest-cov
+      
+      - name: Lint with flake8
+        run: flake8 src tests scripts
+      
+      - name: Check code formatting with black
+        run: black --check src tests scripts
+      
+      - name: Check import sorting with isort
+        run: isort --check-only src tests scripts
+      
+      - name: Run tests with pytest
+        run: |
+          pytest --verbose --cov=dimjournal --cov-report=xml --cov-report=html --cov-report=term-missing
+      
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+  build-package:
+    name: Build Python Package
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build setuptools setuptools_scm wheel
+      
+      - name: Build package
+        run: python -m build
+      
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package
+          path: dist/
+          retention-days: 30
+
+  build-binaries:
+    name: Build Binary on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: dimjournal-linux-x64
+            binary_name: dimjournal
+          - os: windows-latest
+            artifact_name: dimjournal-windows-x64
+            binary_name: dimjournal.exe
+          - os: macos-latest
+            artifact_name: dimjournal-macos-x64
+            binary_name: dimjournal
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install Chrome (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+      
+      - name: Install Chrome (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install --cask google-chrome
+      
+      - name: Install Chrome (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install googlechrome
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install PyInstaller
+      
+      - name: Build binary
+        run: |
+          pyinstaller --onefile --name ${{ matrix.binary_name }} --hidden-import dimjournal --hidden-import undetected_chromedriver --hidden-import selenium --hidden-import PIL --hidden-import pymtpng src/dimjournal/__main__.py
+      
+      - name: Test binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          ./dist/${{ matrix.binary_name }} --help
+      
+      - name: Test binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          ./dist/${{ matrix.binary_name }} --help
+      
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.binary_name }}
+          retention-days: 30
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install bandit safety
+      
+      - name: Run bandit security scan
+        run: bandit -r src/
+      
+      - name: Check for known security vulnerabilities
+        run: safety check
+
+  publish-package:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [test, build-package, build-binaries]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: dist/
+      
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
+          verbose: true
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [test, build-package, build-binaries]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          
+          # Copy Python package
+          cp artifacts/python-package/* release-assets/
+          
+          # Copy and rename binaries
+          cp artifacts/dimjournal-linux-x64/dimjournal release-assets/dimjournal-linux-x64
+          cp artifacts/dimjournal-windows-x64/dimjournal.exe release-assets/dimjournal-windows-x64.exe
+          cp artifacts/dimjournal-macos-x64/dimjournal release-assets/dimjournal-macos-x64
+          
+          # Make binaries executable
+          chmod +x release-assets/dimjournal-*
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Extract release notes from CHANGELOG.md
+          sed -n "/## \[${VERSION#v}\]/,/## \[/p" CHANGELOG.md | sed '$d' > release_notes.md
+          
+          # If no changelog entry, create default notes
+          if [ ! -s release_notes.md ]; then
+            echo "## Changes in $VERSION" > release_notes.md
+            echo "- Bug fixes and improvements" >> release_notes.md
+          fi
+          
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+          cat release_notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ steps.release_notes.outputs.VERSION }}
+          body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-docs:
+    name: Update Documentation
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pydoc-markdown
+      
+      - name: Generate API documentation
+        run: |
+          pydoc-markdown > API.md
+      
+      - name: Commit and push documentation
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'docs: Update API documentation [skip ci]'
+          file_pattern: 'API.md'
+          commit_author: 'github-actions[bot] <github-actions[bot]@users.noreply.github.com>'
+```
+
+### 2. Required Secrets
+
+To enable PyPI publishing, add these secrets to your GitHub repository:
+
+1. Go to your repository on GitHub
+2. Navigate to Settings → Secrets and variables → Actions
+3. Add the following secrets:
+
+**PYPI_TOKEN**
+- Go to [PyPI](https://pypi.org/manage/account/token/)
+- Create a new API token
+- Copy the token and add it as a secret
+
+### 3. Optional: Codecov Integration
+
+For code coverage reporting:
+
+1. Go to [Codecov](https://codecov.io/)
+2. Connect your GitHub repository
+3. Add the `CODECOV_TOKEN` secret (if required)
+
+## Current Working Features
+
+Even without the advanced CI/CD pipeline, you have:
+
+### ✅ Local Development Tools
+```bash
+# All these work locally
+make test                    # Run tests
+make build                   # Build package
+make binary                  # Build binary
+make release VERSION=v1.0.0  # Create release
+```
+
+### ✅ Basic CI/CD
+- `build.yml`: Tests and builds on push/PR
+- `release.yml`: Creates GitHub releases on git tags
+
+### ✅ Git-Tag Versioning
+```bash
+# Create a release
+git tag v1.0.0
+git push origin v1.0.0
+# This will trigger the release workflow
+```
+
+## Manual Release Process
+
+Until the full CI/CD is set up, you can create releases manually:
+
+```bash
+# 1. Run tests locally
+make test
+
+# 2. Build package
+make build
+
+# 3. Create git tag
+git tag v1.0.0
+git push origin v1.0.0
+
+# 4. Upload to PyPI manually (if desired)
+pip install twine
+twine upload dist/*
+
+# 5. Create GitHub release manually
+# Go to GitHub → Releases → Create new release
+# Upload the files from dist/ folder
+```
+
+## Next Steps
+
+1. **Set up the complete CI/CD pipeline** by creating the workflow file manually
+2. **Add PyPI token** to enable automated publishing
+3. **Test the pipeline** by creating a test release
+4. **Monitor the builds** and adjust as needed
+
+The foundation is solid - you have all the tools and scripts needed for a robust development and release process!
+</document_content>
+</document>
+
+<document index="8">
+<source>INSTALLATION.md</source>
+<document_content>
+# Installation and Development Guide
+
+## Overview
+
+This guide provides comprehensive instructions for setting up the dimjournal project for development and creating releases.
+
+## Prerequisites
+
+- Python 3.10 or higher
+- Git
+- Google Chrome browser (required for the application)
+
+## Development Setup
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/twardoch/dimjournal.git
+cd dimjournal
+```
+
+### 2. Create a Virtual Environment
+
+```bash
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+### 3. Install Development Dependencies
+
+```bash
+pip install -e .[dev]
+```
+
+This installs the package in development mode with all dependencies including:
+- Testing tools (pytest, pytest-cov, pytest-mock)
+- Code formatting (black, isort)
+- Linting (flake8)
+- Security scanning (bandit, safety)
+- Build tools (build, setuptools_scm, wheel)
+- Binary building (PyInstaller)
+- Documentation (pydoc-markdown)
+
+## Available Scripts and Commands
+
+### Using Python Scripts
+
+The project includes several Python scripts in the `scripts/` directory:
+
+#### Test Script (`scripts/test.py`)
+```bash
+python scripts/test.py                 # Run full test suite
+python scripts/test.py --format        # Format code and run tests
+python scripts/test.py --lint-only     # Run linting only
+```
+
+#### Build Script (`scripts/build.py`)
+```bash
+python scripts/build.py                # Build Python package
+python scripts/build.py --binary       # Build package and binary
+```
+
+#### Release Script (`scripts/release.py`)
+```bash
+python scripts/release.py v1.0.0       # Create and tag release
+```
+
+#### Validation Script (`scripts/validate.py`)
+```bash
+python scripts/validate.py             # Validate project structure
+```
+
+### Using the Shell Script
+
+The `build-and-test.sh` script provides a convenient wrapper:
+
+```bash
+./build-and-test.sh                    # Run all tests and build
+./build-and-test.sh --test             # Run tests only
+./build-and-test.sh --build            # Build package only
+./build-and-test.sh --build --binary   # Build package and binary
+./build-and-test.sh --release v1.0.0   # Create release
+./build-and-test.sh --format --test    # Format code and run tests
+```
+
+### Using Makefile
+
+The project includes a Makefile for convenience:
+
+```bash
+make help                              # Show available targets
+make install                           # Install in development mode
+make dev-install                       # Install with dev dependencies
+make test                              # Run tests
+make test-format                       # Format code and run tests
+make lint                              # Run linting
+make format                            # Format code
+make build                             # Build package
+make binary                            # Build package and binary
+make release VERSION=v1.0.0            # Create release
+make clean                             # Clean build artifacts
+make all                               # Clean, test, and build
+make ci                                # Run CI pipeline locally
+```
+
+## Development Workflow
+
+### 1. Basic Development Cycle
+
+```bash
+# Start development
+make dev-install
+
+# Make changes to code
+# ...
+
+# Format and test
+make test-format
+
+# Build package
+make build
+
+# Clean up
+make clean
+```
+
+### 2. Creating a Release
+
+```bash
+# Ensure working directory is clean
+git status
+
+# Run full test suite
+make test
+
+# Create release (this will create git tag and push)
+make release VERSION=v1.0.0
+
+# Or use the script directly
+python scripts/release.py v1.0.0
+```
+
+### 3. Building Binaries
+
+```bash
+# Build standalone binary
+make binary
+
+# Or using the script
+python scripts/build.py --binary
+```
+
+## Git Tag-Based Versioning
+
+The project uses `setuptools_scm` for automatic versioning based on git tags:
+
+- Version is automatically derived from git tags
+- Tags should follow semantic versioning (e.g., `v1.0.0`)
+- Development versions are automatically generated between tags
+- Version information is written to `src/dimjournal/_version.py`
+
+## GitHub Actions CI/CD
+
+The project includes comprehensive GitHub Actions workflows:
+
+### Automated Testing
+- Tests on Python 3.10, 3.11, 3.12
+- Tests on Ubuntu, Windows, and macOS
+- Code formatting checks (black, isort)
+- Linting (flake8)
+- Security scanning (bandit, safety)
+- Coverage reporting
+
+### Automated Building
+- Python package building
+- Multi-platform binary building (Linux, Windows, macOS)
+- Binary testing
+
+### Automated Releases
+- Triggered on git tag push (e.g., `v1.0.0`)
+- Publishes to PyPI automatically
+- Creates GitHub releases with binaries
+- Generates release notes from CHANGELOG.md
+
+## Testing
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=dimjournal
+
+# Run specific test file
+pytest tests/test_dimjournal.py
+
+# Run with verbose output
+pytest -v
+
+# Run only unit tests
+pytest -m unit
+
+# Run only integration tests
+pytest -m integration
+```
+
+### Test Configuration
+
+Test configuration is in `pyproject.toml`:
+- Coverage threshold: 80%
+- Test discovery patterns
+- Test markers for categorization
+
+## Code Quality
+
+### Formatting
+- **Black**: Code formatting with 88-character line length
+- **isort**: Import sorting and organization
+
+### Linting
+- **flake8**: Python linting with configured rules
+- **bandit**: Security vulnerability scanning
+- **safety**: Known vulnerability checking
+
+### Configuration Files
+- `pyproject.toml`: Main configuration for tools
+- `setup.cfg`: Package metadata and legacy tool configuration
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Import errors**: Ensure you've installed with `pip install -e .[dev]`
+2. **Test failures**: Check that Chrome is installed and accessible
+3. **Build errors**: Ensure all dependencies are installed
+4. **Version issues**: Check that git tags are properly formatted
+
+### Getting Help
+
+1. Check the validation script: `python scripts/validate.py`
+2. Review the GitHub Actions logs for CI failures
+3. Ensure all prerequisites are installed
+4. Check that the virtual environment is activated
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests: `make test`
+5. Format code: `make format`
+6. Submit a pull request
+
+## Additional Resources
+
+- [GitHub Actions Documentation](https://docs.github.com/en/actions)
+- [setuptools_scm Documentation](https://setuptools-scm.readthedocs.io/)
+- [PyInstaller Documentation](https://pyinstaller.readthedocs.io/)
+- [pytest Documentation](https://docs.pytest.org/)
+</document_content>
+</document>
+
+<document index="9">
+<source>LICENSE.txt</source>
+<document_content>
+                                 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
 
@@ -1078,9 +1205,1446 @@ Apache License
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-</file>
 
-<file path="pyproject.toml">
+</document_content>
+</document>
+
+<document index="10">
+<source>Makefile</source>
+<document_content>
+# this_file: Makefile
+# Makefile for dimjournal project
+
+.PHONY: help install test lint format build binary release clean dev-install
+
+help:  ## Show this help message
+	@echo "Available targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+install:  ## Install package in development mode
+	pip install -e .
+
+dev-install:  ## Install package with development dependencies
+	pip install -e .[dev]
+
+test:  ## Run tests
+	python scripts/test.py
+
+test-format:  ## Format code and run tests
+	python scripts/test.py --format
+
+lint:  ## Run linting only
+	python scripts/test.py --lint-only
+
+format:  ## Format code
+	python scripts/test.py --format
+
+build:  ## Build package
+	python scripts/build.py
+
+binary:  ## Build package and binary
+	python scripts/build.py --binary
+
+release:  ## Create a release (requires VERSION=vX.X.X)
+ifndef VERSION
+	@echo "Error: VERSION variable is required. Use: make release VERSION=v1.0.0"
+	@exit 1
+endif
+	python scripts/release.py $(VERSION)
+
+clean:  ## Clean build artifacts
+	rm -rf build/
+	rm -rf dist/
+	rm -rf src/dimjournal.egg-info/
+	rm -rf htmlcov/
+	rm -rf .coverage
+	rm -rf coverage.xml
+	rm -rf .pytest_cache/
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete
+	find . -type f -name "*.pyo" -delete
+
+all: clean test build  ## Clean, test, and build
+
+ci: clean test lint build  ## Run CI pipeline locally
+
+# Convenience targets
+t: test  ## Alias for test
+b: build  ## Alias for build
+f: format  ## Alias for format
+l: lint  ## Alias for lint
+c: clean  ## Alias for clean
+</document_content>
+</document>
+
+<document index="11">
+<source>PLAN.md</source>
+<document_content>
+# Dimjournal Improvement Plan
+
+## Executive Summary
+
+This document outlines a comprehensive plan to improve the dimjournal project, making it more stable, elegant, maintainable, and easily deployable. The analysis has identified several critical issues and opportunities for enhancement.
+
+## Current State Analysis
+
+### Critical Issues Found
+
+1. **Syntax Error**: There is a critical syntax error in `src/dimjournal/dimjournal.py` at line 149 - an `except` statement without a corresponding `try` block.
+2. **Test Coverage**: While tests were added, they appear to have been recently simplified, possibly removing important coverage.
+3. **Error Handling**: Some error handling patterns are inconsistent throughout the codebase.
+4. **Documentation**: API documentation is referenced but not generated (pydoc-markdown in CI).
+
+### Strengths
+
+1. Modern Python packaging with pyproject.toml and setup.cfg
+2. Proper CI/CD setup with GitHub Actions
+3. Pre-commit hooks configured
+4. Decent README with examples
+5. Proper project structure (src layout)
+
+## Improvement Plan
+
+### Phase 1: Critical Fixes (Immediate)
+
+#### 1.1 Fix Syntax Error
+- **Issue**: Missing `try` block in `load_user_info` method
+- **Solution**: Add proper try-except block structure
+- **Impact**: Application currently cannot run due to syntax error
+
+#### 1.2 Restore Test Coverage
+- **Issue**: Tests were dramatically simplified in recent commit
+- **Solution**: 
+  - Analyze what test coverage was lost
+  - Restore critical test cases with proper mocking
+  - Add integration tests for key workflows
+- **Impact**: Ensure code reliability and catch regressions
+
+### Phase 2: Code Quality & Architecture (Short-term)
+
+#### 2.1 Refactor Module Structure
+- **Current Issue**: All logic in single large file (dimjournal.py)
+- **Solution**:
+  ```
+  src/dimjournal/
+    ├── __init__.py
+    ├── __main__.py
+    ├── api.py          # MidjourneyAPI class
+    ├── crawler.py      # MidjourneyJobCrawler class
+    ├── downloader.py   # MidjourneyDownloader class
+    ├── constants.py    # Constants class
+    ├── utils.py        # Utility functions
+    └── exceptions.py   # Custom exceptions
+  ```
+- **Benefits**: Better maintainability, easier testing, clearer separation of concerns
+
+#### 2.2 Implement Proper Exception Hierarchy
+- **Create custom exceptions**:
+  - `DimjournalError` (base)
+  - `AuthenticationError`
+  - `NetworkError`
+  - `ParseError`
+  - `StorageError`
+- **Benefits**: More precise error handling, better debugging
+
+#### 2.3 Add Type Hints Throughout
+- Use proper type hints for all functions and methods
+- Add `py.typed` marker file
+- Run mypy for type checking
+- **Benefits**: Better IDE support, catch type errors early
+
+#### 2.4 Implement Retry Logic
+- Add configurable retry mechanism for network operations
+- Use exponential backoff
+- Make retries configurable via CLI/environment
+- **Benefits**: More robust against transient failures
+
+### Phase 3: Configuration & Deployment (Medium-term)
+
+#### 3.1 Configuration Management
+- **Implement configuration system**:
+  - Support for config files (YAML/TOML)
+  - Environment variable overrides
+  - CLI argument overrides
+- **Configuration options**:
+  - Browser settings (headless mode, driver path)
+  - Timeouts and retry settings
+  - Archive folder structure preferences
+  - Logging configuration
+- **Benefits**: Flexibility for different deployment scenarios
+
+#### 3.2 Docker Support
+- Create Dockerfile with Chrome/Chromium pre-installed
+- Add docker-compose.yml for easy deployment
+- Document Docker usage
+- **Benefits**: Consistent environment, easier deployment
+
+#### 3.3 Improve CLI Interface
+- Use `click` instead of `fire` for better CLI experience
+- Add subcommands:
+  - `dimjournal download` - main functionality
+  - `dimjournal config` - manage configuration
+  - `dimjournal test-auth` - test authentication
+  - `dimjournal clean-cache` - clean cookies/cache
+- Add progress indicators and better user feedback
+- **Benefits**: Better user experience, more functionality
+
+### Phase 4: Advanced Features (Long-term)
+
+#### 4.1 Parallel Downloads
+- Implement concurrent image downloads
+- Use asyncio or threading with proper rate limiting
+- **Benefits**: Faster downloads for large archives
+
+#### 4.2 Resume Capability
+- Track download progress in SQLite database
+- Allow resuming interrupted downloads
+- Add verification of downloaded files
+- **Benefits**: Reliability for large archives
+
+#### 4.3 Export Formats
+- Support exporting metadata to different formats:
+  - CSV for spreadsheet analysis
+  - JSON Lines for streaming
+  - SQLite for querying
+- **Benefits**: Better data accessibility
+
+#### 4.4 Web Interface
+- Optional Flask/FastAPI web interface
+- Browse downloaded images
+- Search by prompt/date
+- Batch operations
+- **Benefits**: User-friendly access to archive
+
+### Phase 5: Quality Assurance
+
+#### 5.1 Comprehensive Testing
+- Unit tests for all modules (>80% coverage)
+- Integration tests with mocked Selenium
+- End-to-end tests with real browser (optional)
+- Property-based testing for data parsing
+
+#### 5.2 Documentation
+- Generate API documentation with Sphinx
+- Add architecture diagrams
+- Create troubleshooting guide
+- Video tutorials for setup
+
+#### 5.3 Performance Optimization
+- Profile code to identify bottlenecks
+- Optimize image processing pipeline
+- Add caching where appropriate
+- Benchmark different configurations
+
+## Implementation Priority
+
+1. **Critical** (Do immediately):
+   - Fix syntax error
+   - Basic test restoration
+   
+2. **High** (Next 1-2 weeks):
+   - Module refactoring
+   - Exception hierarchy
+   - Configuration system basics
+   
+3. **Medium** (Next month):
+   - Docker support
+   - CLI improvements
+   - Type hints
+   
+4. **Low** (Future):
+   - Web interface
+   - Advanced export formats
+   - Performance optimizations
+
+## Success Metrics
+
+- **Stability**: Zero crashes in normal operation
+- **Testability**: >80% test coverage
+- **Deployability**: One-command Docker deployment
+- **Maintainability**: Clear module structure, comprehensive docs
+- **Performance**: <5 seconds per image download
+- **Usability**: Clear error messages, intuitive CLI
+
+## Risk Mitigation
+
+1. **Midjourney API Changes**: 
+   - Implement version detection
+   - Abstract scraping logic for easy updates
+   - Maintain fallback strategies
+
+2. **Browser Detection**:
+   - Keep undetected-chromedriver updated
+   - Implement multiple browser support
+   - Add user-agent rotation
+
+3. **Data Loss**:
+   - Implement checksums for downloads
+   - Add backup/restore functionality
+   - Never overwrite existing files
+
+## Timeline
+
+- Week 1: Critical fixes and basic refactoring
+- Week 2-3: Architecture improvements and testing
+- Week 4-5: Configuration and Docker support
+- Week 6+: Advanced features and optimizations
+
+This plan provides a roadmap to transform dimjournal from a functional script into a professional-grade tool that is reliable, maintainable, and user-friendly.
+</document_content>
+</document>
+
+<document index="12">
+<source>README.md</source>
+<document_content>
+# Dimjournal: Your Automated Midjourney Backup Tool
+
+Dimjournal is a powerful Python tool designed to create and maintain a local backup of your Midjourney image generations. It automates the process of downloading your job history (metadata) and upscaled images, organizing them neatly on your computer.
+
+## Part 1: User-Facing Documentation
+
+### What is Dimjournal?
+
+Dimjournal is a command-line and programmatic tool that interacts with the Midjourney web interface to back up your creative work. It downloads:
+
+*   **Job Metadata:** Information about your prompts, enqueue times, job IDs, etc.
+*   **Upscaled Images:** The actual PNG image files of your upscaled generations.
+
+### Who is it For?
+
+This tool is for any Midjourney user who wants:
+
+*   A reliable local backup of their image archive.
+*   To prevent data loss in case of issues with the Midjourney service.
+*   Offline access to their generated images and associated prompts.
+*   An organized way to browse their Midjourney history locally.
+
+### Why is it Useful?
+
+*   **Automated Backups:** Set it up once, and run it periodically to keep your local archive up-to-date.
+*   **Local & Private:** Your data is stored on your own machine.
+*   **Organized Archive:** Images are saved in a clear `Year/Month/ImageFileName.png` structure.
+*   **Metadata Embedding:** Key information like the prompt, author, and creation time is embedded directly into the PNG files for easy reference with compatible image viewers.
+*   **Resumable Downloads:** Dimjournal intelligently skips already downloaded images and metadata, only fetching new or missing items.
+*   **Session Management:** Saves and reuses login session cookies to minimize the need for manual logins.
+*   **Detailed Logging:** Provides comprehensive logs for monitoring and troubleshooting.
+
+### Disclaimer
+
+**Important:** The terms of use of Midjourney may disallow or restrict automation or web scraping. Using this tool may be against Midjourney's Terms of Service. You use Dimjournal at your own risk. The developers of Dimjournal are not responsible for any consequences that may arise from using this software, including but not limited to account suspension or termination.
+
+### Features
+
+*   Automated download of Midjourney job history (metadata) and upscaled images.
+*   Creation of an organized local archive (folder structure: `Year/Month/ImageFileName.png`).
+*   Embedding of prompt, author, and other metadata directly into PNG image files.
+*   Resumable operation: only downloads new or missing data on subsequent runs.
+*   Secure local cookie management to persist login sessions.
+*   Detailed logging for transparency and troubleshooting.
+*   Command-line interface (CLI) and programmatic (Python library) usage.
+
+### Prerequisites
+
+*   **Python:** Version 3.10 or higher.
+*   **Google Chrome:** Must be installed on your system, as `undetected_chromedriver` (a dependency) relies on it.
+
+### Installation
+
+You can install Dimjournal using pip.
+
+**Stable Version (Recommended):**
+
+```bash
+pip install dimjournal
+```
+
+**Development Version (for the latest features and fixes):**
+
+```bash
+pip install git+https://github.com/twardoch/dimjournal.git
+```
+After installation, you should be able to run `dimjournal` from your terminal. If not, ensure your Python scripts directory is in your system's PATH, or use `python3 -m dimjournal`.
+
+### Usage
+
+#### Command Line Interface (CLI)
+
+The first time you run Dimjournal, it will open a Chrome browser window. You will need to manually log in to your Midjourney account. After successful login, Dimjournal will save session cookies to expedite future logins.
+
+**Basic Usage (defaults to `~/Pictures/midjourney/dimjournal` or `~/My Pictures/midjourney/dimjournal`):**
+
+```bash
+dimjournal
+```
+
+**Specify a Custom Archive Folder:**
+
+```bash
+dimjournal --archive_folder /path/to/your/custom_archive
+```
+or on Windows:
+```bash
+dimjournal --archive_folder C:\path\to\your\custom_archive
+```
+
+**Limit Number of Job Pages to Crawl:**
+Useful for initial testing or if you only want to fetch the most recent items. Each page typically contains about 50 jobs.
+
+```bash
+dimjournal --limit 5
+```
+This will crawl the 5 most recent pages of your job history for both upscaled jobs and all jobs.
+
+#### Programmatic Usage (Python)
+
+You can integrate Dimjournal's download functionality into your own Python scripts.
+
+```python
+import logging
+from pathlib import Path
+from dimjournal import download
+
+# It's good practice to configure logging to see Dimjournal's output
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Specify the directory where you want to store the data.
+# If None, it defaults to Pictures/midjourney/dimjournal or My Pictures/midjourney/dimjournal.
+archive_folder_path = Path("./my_midjourney_backup")
+# archive_folder_path = None # To use the default location
+
+# Specify a limit for the number of job history pages to crawl (optional).
+# Set to None or omit to crawl all available history.
+crawl_limit = 10  # Example: Crawl 10 pages of recent jobs
+
+try:
+    print(f"Starting Dimjournal backup to: {archive_folder_path.resolve() if archive_folder_path else 'default location'}")
+    download(archive_folder=archive_folder_path, limit=crawl_limit)
+    print("Dimjournal process complete.")
+except Exception as e:
+    logging.error(f"An error occurred during the Dimjournal process: {e}", exc_info=True)
+    print(f"An error occurred. Check logs for details.")
+
+```
+
+## Part 2: Technical Documentation
+
+### How it Works (Technical Overview)
+
+Dimjournal employs a series of steps to back up your Midjourney data:
+
+1.  **Browser Automation:** It uses `undetected_chromedriver`, a specialized version of Selenium's ChromeDriver, to launch and control a Google Chrome browser. This allows it to mimic human interaction with the Midjourney website.
+2.  **Login & Session Management:**
+    *   On the first run, the user logs into Midjourney through the automated browser.
+    *   Dimjournal then saves the session cookies (specifically `__Secure-next-auth.session-token`) to a local file (`cookies.pkl`) within the archive directory.
+    *   Subsequent runs load these cookies, attempting to restore the session and bypass manual login.
+3.  **User Information Fetching:**
+    *   It navigates to the Midjourney account page (`https://www.midjourney.com/account/`).
+    *   It extracts user data, including the crucial `user_id`, from a JSON object embedded in the page's HTML (within a `<script id="__NEXT_DATA__">` tag).
+    *   This user information is saved to `user.json` in the archive directory.
+4.  **API Interaction & Job Crawling:**
+    *   Dimjournal makes GET requests to Midjourney's internal API endpoint (`https://www.midjourney.com/api/app/recent-jobs/`) to fetch job listings.
+    *   It constructs query parameters for this API call, including `userId`, `jobType` (e.g., 'upscale'), `page`, `amount`, `orderBy`, `jobStatus`, etc.
+    *   The tool performs two main crawling passes:
+        *   One for `'upscale'` jobs (to get images).
+        *   One for all job types (to get a more complete metadata archive).
+    *   Fetched job data is stored and updated in `jobs_upscaled.json` (for upscales) and `jobs.json` (for all jobs) within the archive directory. The crawler only adds new jobs not already present in these files.
+5.  **Image Downloading & Processing:**
+    *   For each upscale job identified, Dimjournal checks if the image has already been archived.
+    *   If an image is missing, it navigates the automated browser to the image URL.
+    *   It then executes a JavaScript snippet (`Constants.mj_download_image_js`) in the browser to fetch the image data as a base64 encoded string. This method can be more robust for images that are dynamically loaded or protected.
+    *   The base64 string is decoded into binary image data.
+6.  **File Organization & Metadata Embedding:**
+    *   Images are saved to a structured directory: `ARCHIVE_FOLDER/YYYY/MM/YYYYMMDD-HHMM_prompt-slug_jobIDprefix.png`.
+        *   `YYYY`: Year
+        *   `MM`: Month (zero-padded)
+        *   `YYYYMMDD-HHMM`: Timestamp of the job
+        *   `prompt-slug`: A slugified version of the prompt (max 49 chars)
+        *   `jobIDprefix`: The first 4 characters of the job ID
+    *   For PNG images, Dimjournal uses the `pymtpng` library to embed metadata (prompt, author, creation time, etc.) into the PNG's tEXt chunks. Non-PNG images are saved as-is.
+7.  **Logging:** Throughout the process, detailed logs are generated using Python's `logging` module, providing insight into operations and aiding in troubleshooting.
+
+**Key Libraries Used:**
+
+*   `undetected_chromedriver` & `selenium`: For web browser automation and interaction.
+*   `BeautifulSoup4`: For parsing HTML content (primarily to extract user info).
+*   `Pillow (PIL)`: Used by `pymtpng` for image manipulation before saving PNGs with metadata.
+*   `pymtpng`: For embedding metadata into PNG files.
+*   `python-slugify`: To create safe filenames from prompts.
+*   `fire`: To create the command-line interface.
+*   `tqdm`: For displaying progress bars during crawling and downloading.
+
+### Code Structure
+
+The project is organized as follows:
+
+*   `src/dimjournal/`
+    *   `dimjournal.py`: Contains the core logic of the application.
+        *   `Constants`: Class holding various constants like URLs, cookie names, date formats.
+        *   `MidjourneyAPI`: Handles all direct interactions with Midjourney via the browser (login, fetching user info, making API calls for job data).
+        *   `MidjourneyJobCrawler`: Responsible for iterating through job history pages, fetching job data using `MidjourneyAPI`, and saving/updating `jobs_*.json` files.
+        *   `MidjourneyDownloader`: Manages the download of actual image files, organizes them into folders, and embeds metadata into PNGs.
+        *   `download()`: The main public function that orchestrates the instances of the above classes to perform the full backup process.
+    *   `__main__.py`: Provides the CLI entry point, using `python-fire` to expose the `download` function.
+    *   `__init__.py`: Makes the `download` function available for import and sets up package versioning.
+*   `tests/`: Contains unit and integration tests written using `pytest`.
+    *   `test_dimjournal.py`: Test suite for the core functionalities.
+*   `setup.py`, `pyproject.toml`, `setup.cfg`: Files related to packaging, dependencies, and project configuration (following PyScaffold structure).
+*   `.github/workflows/ci.yml`: GitHub Actions workflow for continuous integration (testing, linting).
+*   `README.md`: This file.
+*   `LICENSE.txt`: Apache 2.0 License.
+*   `CHANGELOG.md`: History of changes to the project.
+*   `AUTHORS.md`: List of contributors.
+
+### Key Classes and Functions
+
+*   **`MidjourneyAPI(driver, archive_folder)`**
+    *   `log_in()`: Manages login, loads/saves cookies.
+    *   `get_user_info()`: Fetches and stores user ID and other account details.
+    *   `request_recent_jobs(...)`: Queries the Midjourney API for job listings.
+*   **`MidjourneyJobCrawler(api, archive_folder, job_type)`**
+    *   `load_archive_data()`: Loads existing job data from local JSON files.
+    *   `update_archive_data(job_listing)`: Adds new jobs to the local archive and saves.
+    *   `crawl(limit, from_date)`: Iteratively calls `api.request_recent_jobs()` and updates the archive.
+*   **`MidjourneyDownloader(api, archive_folder)`**
+    *   `fetch_image(url)`: Retrieves image data using JavaScript execution in the browser.
+    *   `create_folders(dt_obj)`: Creates the year/month directory structure.
+    *   `fetch_and_write_image(image_url, image_path, info)`: Downloads an image and saves it, embedding metadata if it's a PNG.
+    *   `download_missing()`: Iterates through upscaled jobs, downloads missing images, and updates job metadata with archive status.
+*   **`download(archive_folder, user_id, limit)`** (in `src/dimjournal/dimjournal.py`)
+    *   The main entry point function called by the CLI or when used as a library.
+    *   Initializes the WebDriver, `MidjourneyAPI`, `MidjourneyJobCrawler` (for upscales and all jobs), and `MidjourneyDownloader`.
+    *   Orchestrates the entire backup process: login, crawl jobs, download images.
+    *   Handles overall error catching and WebDriver cleanup.
+
+### Contributing
+
+Contributions are highly welcome! If you'd like to improve Dimjournal, please follow these steps:
+
+1.  **Fork the repository** on GitHub.
+2.  **Clone your fork** locally: `git clone https://github.com/YOUR_USERNAME/dimjournal.git`
+3.  **Create a new branch** for your feature or bug fix: `git checkout -b feature/your-feature-name` or `git checkout -b fix/your-bug-fix`.
+4.  **Set up your development environment.** It's recommended to use a virtual environment:
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    pip install -e ".[testing]" # Installs package in editable mode with testing extras
+    pip install pre-commit
+    pre-commit install # Sets up pre-commit hooks for formatting and linting
+    ```
+5.  **Make your changes.** Implement your feature or fix the bug.
+6.  **Ensure your changes pass all checks:**
+    *   Run linters and formatters using pre-commit: `pre-commit run --all-files`
+    *   Run the test suite: `pytest`
+7.  **Commit your changes** with a descriptive commit message (e.g., `feat: Add support for grid image downloads` or `fix: Correctly handle XYZ error`).
+8.  **Push your changes** to your fork: `git push origin feature/your-feature-name`.
+9.  **Open a Pull Request (PR)** from your fork to the main `dimjournal` repository. Clearly describe the changes you've made and why.
+
+**Coding Conventions & Rules:**
+
+*   **Python Version:** Code should be compatible with Python 3.10 and newer.
+*   **Style:** Adhere to PEP 8. `pre-commit` with `flake8` and `black` (if configured, or a similar formatter) will help enforce this.
+*   **Type Hinting:** Use type hints for function signatures and variables where appropriate to improve code clarity and enable static analysis.
+*   **Logging:** Utilize the `logging` module for diagnostic messages. Use appropriate log levels (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`).
+*   **Error Handling:** Implement robust error handling. Catch specific exceptions where possible and log errors clearly.
+*   **Testing:** Write tests for new features and bug fixes using `pytest`. Ensure existing tests pass.
+*   **Semantic Versioning:** Follow semantic versioning (Major.Minor.Patch) for releases, as outlined in `CHANGELOG.md`.
+
+### Changelog
+
+For a detailed history of changes, please refer to the [CHANGELOG.md](./CHANGELOG.md) file.
+
+### License
+
+Dimjournal is licensed under the Apache License, Version 2.0. See the [LICENSE.txt](./LICENSE.txt) file for the full license text.
+
+### Authors
+
+See the [AUTHORS.md](./AUTHORS.md) file for a list of contributors.
+---
+
+*Initial development assisted by AI.*
+
+</document_content>
+</document>
+
+<document index="13">
+<source>REFACTOR_FILELIST.txt</source>
+<document_content>
+44	./llms.txt
+32	./src/dimjournal/dimjournal.py
+31	./dimjournal/_previous/dimjournal.py
+16	./dimjournal/_previous/test_dimjournal.py
+15	./README.md
+11	./LICENSE.txt
+7	./PLAN.md
+3	./CHANGELOG.md
+3	./tox.ini
+3	./TODO.md
+
+</document_content>
+</document>
+
+<document index="14">
+<source>REFACTOR_SPLITTING.md</source>
+<document_content>
+# Refactoring Plan: Splitting Large Code Files in Dimjournal
+
+This document outlines a meticulous plan for refactoring the `dimjournal` project by splitting large, monolithic code files into smaller, more focused modules. This will enhance maintainability, improve testability, and clarify the separation of concerns within the codebase.
+
+## I. Core Principles for Refactoring
+
+1.  **Functionality Intact**: The primary goal is to split files without altering the existing functionality or introducing regressions.
+2.  **Clear Separation of Concerns**: Each new module will encapsulate a specific set of related responsibilities.
+3.  **Maintainability**: Smaller files are easier to understand, debug, and modify.
+4.  **Testability**: Unit tests can be more granular and focused on individual components.
+5.  **Idiomatic Python**: Adhere to Python best practices, including clear imports and module-level documentation.
+6.  **Incremental Changes**: Changes will be applied step-by-step, with verification at each stage.
+
+## II. Refactoring `src/dimjournal/dimjournal.py`
+
+This file currently contains the `Constants` class, utility functions, and the core `MidjourneyAPI`, `MidjourneyJobCrawler`, `MidjourneyDownloader` classes, along with the main `download` orchestration function.
+
+**Proposed New Module Structure within `src/dimjournal/`:**
+
+```
+src/dimjournal/
+├── __init__.py
+├── __main__.py
+├── api.py          # MidjourneyAPI class and related functions (e.g., cookie handling)
+├── crawler.py      # MidjourneyJobCrawler class
+├── downloader.py   # MidjourneyDownloader class and image processing functions
+├── constants.py    # Constants class
+├── utils.py        # General utility functions (e.g., get_date_ninety_days_prior)
+└── exceptions.py   # Custom exception classes (to be created)
+```
+
+### Step-by-Step Plan for `src/dimjournal/dimjournal.py`
+
+**Phase 1: Extracting Constants and Utilities**
+
+1.  **Create `src/dimjournal/constants.py`**:
+    *   Move the entire `Constants` class definition from `src/dimjournal/dimjournal.py` to this new file.
+    *   Add necessary imports to `constants.py` (e.g., `from pathlib import Path`).
+    *   In `src/dimjournal/dimjournal.py` and any other files that use `Constants`, replace `class Constants:` with `from .constants import Constants`.
+
+2.  **Create `src/dimjournal/utils.py`**:
+    *   Move the `get_date_ninety_days_prior` function from `src/dimjournal/dimjournal.py` to this new file.
+    *   Add necessary imports to `utils.py` (e.g., `import datetime as dt`).
+    *   In `src/dimjournal/dimjournal.py` and `tests/test_dimjournal.py`, replace direct usage with `from .utils import get_date_ninety_days_prior`.
+
+3.  **Create `src/dimjournal/exceptions.py`**:
+    *   Create a new file `src/dimjournal/exceptions.py`.
+    *   Define a base custom exception, e.g., `class DimjournalError(Exception): pass`.
+    *   Define specific custom exceptions that will be used for more granular error handling (e.g., `AuthenticationError`, `NetworkError`, `ParseError`, `StorageError`). These will be integrated in a later phase.
+    *   For now, no changes are needed in `src/dimjournal/dimjournal.py` related to this file, but it's good to create it early.
+
+**Phase 2: Extracting Core Classes**
+
+1.  **Create `src/dimjournal/api.py`**:
+    *   Move the entire `MidjourneyAPI` class definition from `src/dimjournal/dimjournal.py` to this new file.
+    *   Add all necessary imports to `api.py` (e.g., `import json`, `import logging`, `import pickle`, `from pathlib import Path`, `from bs4 import BeautifulSoup`, `from selenium.common.exceptions import InvalidCookieDomainException, TimeoutException`, `from selenium.webdriver.common.by import By`, `from selenium.webdriver.support import expected_conditions as EC`, `from selenium.webdriver.support.ui import WebDriverWait`, `import undetected_chromedriver as webdriver`).
+    *   Crucially, update the import for `Constants` within `api.py` to `from .constants import Constants`.
+    *   In `src/dimjournal/dimjournal.py`, replace `class MidjourneyAPI:` with `from .api import MidjourneyAPI`.
+
+2.  **Create `src/dimjournal/crawler.py`**:
+    *   Move the entire `MidjourneyJobCrawler` class definition from `src/dimjournal/dimjournal.py` to this new file.
+    *   Add all necessary imports to `crawler.py` (e.g., `import json`, `import logging`, `import itertools`, `from pathlib import Path`, `from tqdm import tqdm`).
+    *   Update imports within `crawler.py`: `from .api import MidjourneyAPI` and `from .constants import Constants`.
+    *   In `src/dimjournal/dimjournal.py`, replace `class MidjourneyJobCrawler:` with `from .crawler import MidjourneyJobCrawler`.
+
+3.  **Create `src/dimjournal/downloader.py`**:
+    *   Move the entire `MidjourneyDownloader` class definition from `src/dimjournal/dimjournal.py` to this new file.
+    *   Add all necessary imports to `downloader.py` (e.g., `import base64`, `import datetime as dt`, `import io`, `import json`, `import logging`, `from pathlib import Path`, `from urllib.parse import urlparse`, `import numpy as np`, `import pymtpng`, `from PIL import Image`, `from slugify import slugify`, `from tqdm import tqdm`).
+    *   Update imports within `downloader.py`: `from .api import MidjourneyAPI` (if `MidjourneyAPI` is passed to its constructor, which it is) and `from .constants import Constants`.
+    *   In `src/dimjournal/dimjournal.py`, replace `class MidjourneyDownloader:` with `from .downloader import MidjourneyDownloader`.
+
+**Phase 3: Updating `src/dimjournal/dimjournal.py` (Main Orchestration File)**
+
+1.  **Update Imports**: At the top of `src/dimjournal/dimjournal.py`, remove all the moved class and function definitions. Replace them with imports from the newly created modules:
+    ```python
+    import logging
+    import os
+    from pathlib import Path
+    import undetected_chromedriver as webdriver
+
+    from .api import MidjourneyAPI
+    from .crawler import MidjourneyJobCrawler
+    from .downloader import MidjourneyDownloader
+    from .constants import Constants # Ensure Constants is imported if still used directly
+    from .utils import get_date_ninety_days_prior # Ensure utils is imported if still used directly
+    # from .exceptions import DimjournalError, AuthenticationError, etc. (for future use)
+    ```
+2.  **Review `download` function**: Ensure all calls within the `download` function correctly reference the imported classes (e.g., `MidjourneyAPI(...)` instead of assuming it's in the same file). No functional changes should be needed here, only import adjustments.
+3.  **Logging**: Ensure the `_log = logging.getLogger("dimjournal")` line remains, and `logging.basicConfig` is handled appropriately (it's currently inside `download`, which is fine for a CLI entry point).
+
+**Phase 4: Updating `src/dimjournal/__init__.py` and `src/dimjournal/__main__.py`**
+
+1.  **`src/dimjournal/__init__.py`**:
+    *   The `download` function is currently imported directly from `dimjournal.py`. This import should remain as `from .dimjournal import download` to maintain the public API.
+    *   Ensure `importlib.metadata` handling is correct.
+
+2.  **`src/dimjournal/__main__.py`**:
+    *   The `cli` function uses `fire.Fire(download)`. This import `from .dimjournal import download` should remain unchanged.
+
+## III. Refactoring `tests/test_dimjournal.py`
+
+This file contains tests for various components. To align with the new module structure, these tests should be split into corresponding test files.
+
+**Proposed New Test File Structure within `tests/`:**
+
+```
+tests/
+├── conftest.py     # Shared fixtures (mock_driver, mock_api)
+├── test_api.py     # Tests for MidjourneyAPI
+├── test_crawler.py # Tests for MidjourneyJobCrawler
+├── test_downloader.py # Tests for MidjourneyDownloader
+└── test_utils.py   # Tests for utility functions (e.g., get_date_ninety_days_prior)
+```
+
+### Step-by-Step Plan for `tests/test_dimjournal.py`
+
+**Phase 1: Move Shared Fixtures to `tests/conftest.py`**
+
+1.  **Update `tests/conftest.py`**:
+    *   Move the `mock_driver` and `mock_api` fixtures from `tests/test_dimjournal.py` to `tests/conftest.py`.
+    *   Ensure all necessary imports are present in `conftest.py` (e.g., `import pytest`, `import json`, `import undetected_chromedriver as webdriver`, `from dimjournal.dimjournal import Constants, MidjourneyAPI`). Note: `MidjourneyAPI` will eventually be imported from `dimjournal.api`. For now, keep the existing import path, and update it once `dimjournal.api` is created.
+    *   The `tmp_path` fixture is provided by `pytest` and doesn't need to be moved.
+
+**Phase 2: Create New Test Files and Move Tests**
+
+1.  **Create `tests/test_utils.py`**:
+    *   Move `test_get_date_ninety_days_prior` and `test_get_date_ninety_days_prior_leap_year` functions to this file.
+    *   Update imports: `from dimjournal.utils import get_date_ninety_days_prior` and `from dimjournal.constants import Constants`.
+
+2.  **Create `tests/test_api.py`**:
+    *   Move the `TestMidjourneyAPI` class and all its methods to this file.
+    *   Update imports: `from dimjournal.api import MidjourneyAPI` and `from dimjournal.constants import Constants`.
+    *   Ensure `mock_api` and `mock_driver` fixtures are correctly referenced (they will be auto-discovered from `conftest.py`).
+
+3.  **Create `tests/test_crawler.py`**:
+    *   Move the `TestMidjourneyJobCrawler` class and all its methods to this file.
+    *   Update imports: `from dimjournal.crawler import MidjourneyJobCrawler`, `from dimjournal.api import MidjourneyAPI` (for the `mock_api` fixture), and `from dimjournal.constants import Constants`.
+
+4.  **Create `tests/test_downloader.py`**:
+    *   Move the `TestMidjourneyDownloader` class and all its methods to this file.
+    *   Update imports: `from dimjournal.downloader import MidjourneyDownloader`, `from dimjournal.api import MidjourneyAPI` (for the `mock_api` fixture), `from dimjournal.constants import Constants`, `import datetime as dt`, `import json`, `import numpy as np`, `from PIL import Image`, `import io`, `import pymtpng`, `from urllib.parse import urlparse`, `from slugify import slugify`.
+
+**Phase 3: Clean Up `tests/test_dimjournal.py`**
+
+1.  After moving all tests and fixtures, the original `tests/test_dimjournal.py` file should be almost empty. Remove any remaining test functions and the `test()` placeholder. It can be deleted or kept as a minimal file if desired, but it should no longer contain actual tests.
+
+## IV. Verification Steps After Each Phase
+
+After completing each phase (or even each major step within a phase), it is crucial to verify that the changes have not introduced any regressions.
+
+1.  **Run Linters/Formatters**:
+    ```bash
+    pre-commit run --all-files
+    ```
+    This ensures code style and basic syntax are correct.
+
+2.  **Run Tests**:
+    ```bash
+    pytest
+    ```
+    Ensure all existing tests pass. If tests fail, debug and fix immediately before proceeding. This is critical for maintaining functionality.
+
+3.  **Manual Smoke Test (if applicable)**:
+    *   Run the main `dimjournal` command line tool to ensure it still functions as expected (e.g., `python -m dimjournal --help` or a small download run).
+
+## V. Future Enhancements (Post-Refactoring)
+
+Once the refactoring is complete and verified, the following improvements can be considered:
+
+*   **Integrate Custom Exceptions**: Replace generic `Exception` catches with the specific custom exceptions defined in `exceptions.py` for more precise error handling.
+*   **Type Hinting Enforcement**: Configure `mypy` and add it to pre-commit hooks to enforce type checking across the newly typed codebase.
+*   **Comprehensive Test Coverage**: Review and expand test coverage, especially for edge cases and error conditions, leveraging the improved modularity.
+*   **Documentation**: Update module-level docstrings and potentially generate API documentation using tools like Sphinx.
+
+This detailed plan provides a clear roadmap for a junior developer to systematically refactor the `dimjournal` codebase, ensuring a smooth transition to a more organized and maintainable architecture.
+
+</document_content>
+</document>
+
+<document index="15">
+<source>TODO.md</source>
+<document_content>
+# TODO List
+
+## Critical Issues (Immediate)
+
+- [ ] Fix syntax error in `src/dimjournal/dimjournal.py` line 149 (missing try block)
+- [ ] Run tests to verify current functionality
+- [ ] Fix any failing tests after syntax error correction
+
+## High Priority (Next 1-2 weeks)
+
+### Code Quality
+- [ ] Refactor dimjournal.py into multiple modules:
+  - [ ] Create `api.py` for MidjourneyAPI class
+  - [ ] Create `crawler.py` for MidjourneyJobCrawler class
+  - [ ] Create `downloader.py` for MidjourneyDownloader class
+  - [ ] Create `constants.py` for Constants class
+  - [ ] Create `utils.py` for utility functions
+  - [ ] Create `exceptions.py` for custom exceptions
+
+### Error Handling
+- [ ] Implement custom exception hierarchy
+- [ ] Add retry logic with exponential backoff for network operations
+- [ ] Improve error messages for better user experience
+
+### Testing
+- [ ] Restore comprehensive test coverage (target >80%)
+- [ ] Add integration tests for main workflows
+- [ ] Set up coverage reporting
+
+## Medium Priority (Next month)
+
+### Type Safety
+- [ ] Add type hints to all functions and methods
+- [ ] Add py.typed marker file
+- [ ] Configure mypy and add to pre-commit hooks
+
+### Configuration
+- [ ] Implement configuration file support (YAML/TOML)
+- [ ] Add environment variable support
+- [ ] Make timeouts and retries configurable
+
+### CLI Improvements
+- [ ] Replace fire with click for better CLI
+- [ ] Add subcommands (download, config, test-auth, clean-cache)
+- [ ] Improve progress indicators and user feedback
+
+### Deployment
+- [ ] Create Dockerfile with Chrome pre-installed
+- [ ] Add docker-compose.yml
+- [ ] Document Docker deployment process
+- [ ] Add installation script for common platforms
+
+## Low Priority (Future enhancements)
+
+### Performance
+- [ ] Implement parallel image downloads
+- [ ] Add download resume capability
+- [ ] Optimize image processing pipeline
+- [ ] Add caching layer
+
+### Features
+- [ ] Export metadata to CSV/SQLite formats
+- [ ] Add web interface for browsing archives
+- [ ] Implement search functionality
+- [ ] Add batch operations support
+
+### Documentation
+- [ ] Generate API documentation with Sphinx
+- [ ] Create architecture diagrams
+- [ ] Write troubleshooting guide
+- [ ] Record setup video tutorials
+
+### Quality Assurance
+- [ ] Set up continuous deployment
+- [ ] Add performance benchmarks
+- [ ] Implement automated browser testing
+- [ ] Add security scanning
+
+## Completed Tasks
+
+- [x] Update CHANGELOG.md with recent changes
+- [x] Analyze codebase for improvement areas
+- [x] Create comprehensive improvement plan (PLAN.md)
+- [x] Create simplified TODO list (this file)
+</document_content>
+</document>
+
+<document index="16">
+<source>WORKFLOWS_TEMPLATES.md</source>
+<document_content>
+# GitHub Actions Workflow Templates
+
+This file contains the workflow templates that need to be manually created due to GitHub App permissions limitations.
+
+## Basic Build and Test Workflow
+
+Create `.github/workflows/build.yml`:
+
+```yaml
+name: Build and Test
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[testing]
+      
+      - name: Run tests
+        run: |
+          pytest --verbose
+
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+      
+      - name: Build package
+        run: python -m build
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+```
+
+## Release Workflow
+
+Create `.github/workflows/release.yml`:
+
+```yaml
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+      
+      - name: Build package
+        run: python -m build
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+## Advanced CI/CD Pipeline
+
+For the complete CI/CD pipeline with multi-platform testing, binary builds, and PyPI publishing, see the `CICD_SETUP.md` file for the full workflow configuration.
+
+## Manual Setup Instructions
+
+1. Create the `.github/workflows/` directory in your repository
+2. Add the workflow files above
+3. Add required secrets (PYPI_TOKEN for publishing)
+4. Push a git tag to trigger releases: `git tag v1.0.0 && git push origin v1.0.0`
+
+The development tools and scripts are all ready to use locally!
+</document_content>
+</document>
+
+<document index="17">
+<source>build-and-test.sh</source>
+<document_content>
+#!/bin/bash
+# this_file: build-and-test.sh
+# Convenient build and test script for dimjournal
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Functions
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Default values
+ACTION="all"
+BINARY=false
+FORMAT=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "OPTIONS:"
+            echo "  -h, --help     Show this help message"
+            echo "  -t, --test     Run tests only"
+            echo "  -b, --build    Build package only"
+            echo "  -r, --release  Build and release (requires version)"
+            echo "  --binary       Build binary along with package"
+            echo "  --format       Format code before running tests"
+            echo ""
+            echo "Examples:"
+            echo "  $0                    # Run all tests and build"
+            echo "  $0 --test             # Run tests only"
+            echo "  $0 --build --binary   # Build package and binary"
+            echo "  $0 --release v1.0.0   # Release version 1.0.0"
+            echo "  $0 --format --test    # Format code and run tests"
+            exit 0
+            ;;
+        -t|--test)
+            ACTION="test"
+            shift
+            ;;
+        -b|--build)
+            ACTION="build"
+            shift
+            ;;
+        -r|--release)
+            ACTION="release"
+            VERSION="$2"
+            shift 2
+            ;;
+        --binary)
+            BINARY=true
+            shift
+            ;;
+        --format)
+            FORMAT=true
+            shift
+            ;;
+        *)
+            log_error "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Check if we're in the project root
+if [ ! -f "pyproject.toml" ] || [ ! -f "setup.cfg" ]; then
+    log_error "This script must be run from the project root directory"
+    exit 1
+fi
+
+# Check if Python is available
+if ! command -v python &> /dev/null; then
+    log_error "Python is not installed or not in PATH"
+    exit 1
+fi
+
+# Check if scripts directory exists
+if [ ! -d "scripts" ]; then
+    log_error "Scripts directory not found"
+    exit 1
+fi
+
+# Format code if requested
+if [ "$FORMAT" = true ]; then
+    log_info "Formatting code..."
+    python scripts/test.py --format
+fi
+
+# Execute based on action
+case $ACTION in
+    "test")
+        log_info "Running tests..."
+        python scripts/test.py
+        ;;
+    "build")
+        log_info "Building package..."
+        if [ "$BINARY" = true ]; then
+            python scripts/build.py --binary
+        else
+            python scripts/build.py
+        fi
+        ;;
+    "release")
+        if [ -z "$VERSION" ]; then
+            log_error "Version required for release. Use: $0 --release v1.0.0"
+            exit 1
+        fi
+        log_info "Releasing version $VERSION..."
+        python scripts/release.py "$VERSION"
+        ;;
+    "all")
+        log_info "Running full build and test pipeline..."
+        
+        # Run tests first
+        log_info "Step 1: Running tests..."
+        python scripts/test.py
+        
+        # Build package
+        log_info "Step 2: Building package..."
+        if [ "$BINARY" = true ]; then
+            python scripts/build.py --binary
+        else
+            python scripts/build.py
+        fi
+        
+        log_info "Build and test completed successfully!"
+        ;;
+    *)
+        log_error "Unknown action: $ACTION"
+        exit 1
+        ;;
+esac
+
+log_info "Script completed successfully!"
+</document_content>
+</document>
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/dimjournal/_previous/__init__.py
+# Language: python
+
+from importlib.metadata import PackageNotFoundError, version
+from .dimjournal import download
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/dimjournal/_previous/conftest.py
+# Language: python
+
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/dimjournal/_previous/dimjournal.py
+# Language: python
+
+import base64
+import datetime as dt
+import io
+import itertools
+import json
+import logging
+import pickle
+from pathlib import Path
+from typing import List
+from urllib.parse import urlparse
+import numpy as np
+import pymtpng
+import undetected_chromedriver as webdriver
+from bs4 import BeautifulSoup
+from PIL import Image
+from selenium.common.exceptions import InvalidCookieDomainException, TimeoutException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from slugify import slugify
+from tqdm import tqdm
+import os
+
+class Constants:
+
+class MidjourneyAPI:
+    """ A class to interact with the Midjourney API...."""
+    def __init__((self, driver: webdriver.Chrome, archive_folder: Path | str)) -> None:
+        """ The constructor for the MidjourneyAPI class...."""
+    def load_cookies((self)):
+    def save_cookies((self)):
+    def log_in((self)) -> bool:
+        """ Log in to the Midjourney API...."""
+    def load_user_info((self)):
+    def fetch_user_info((self)):
+    def get_user_info((self)) -> bool:
+    def request_recent_jobs((
+        self,
+        from_date: str | None = None,
+        page: int | None = None,
+        job_type: str | None = None,
+        amount: int = 50,
+    )) -> List[dict]:
+        """ Request recent jobs from the Midjourney API...."""
+
+class MidjourneyJobCrawler:
+    def __init__((
+        self, api: MidjourneyAPI, archive_folder: Path, job_type: str | None = None
+    )):
+        """ The constructor for the MidjourneyJobCrawler class...."""
+    def load_archive_data((self)):
+        """ Load the archive data...."""
+    def update_archive_data((self, job_listing: List[dict])):
+        """ Update the archive data with the given job listing...."""
+    def crawl((
+        self,
+        limit: int | None = None,
+        from_date: str | None = None,
+    )):
+        """ Crawl the Midjourney API for job listings...."""
+
+class MidjourneyDownloader:
+    def __init__((self, api, archive_folder)):
+        """ The constructor for the MidjourneyDownloader class...."""
+    def fetch_image((self, url)):
+        """ Fetch an image from the given URL...."""
+    def read_jobs((self)):
+        """ Read the job listings...."""
+    def save_jobs((self)):
+        """ Save the job listings...."""
+    def create_folders((self, dt_obj)):
+        """ Create folders for the given date...."""
+    def fetch_and_write_image((self, image_url, image_path, info)):
+        """ Fetch an image from the given URL and write it to the given path...."""
+    def download_missing((self)):
+        """ Download missing images...."""
+
+def get_date_ninety_days_prior((date_string: str)) -> str:
+    """ Get the date 90 days prior to the given date...."""
+
+def __init__((self, driver: webdriver.Chrome, archive_folder: Path | str)) -> None:
+    """ The constructor for the MidjourneyAPI class...."""
+
+def load_cookies((self)):
+
+def save_cookies((self)):
+
+def log_in((self)) -> bool:
+    """ Log in to the Midjourney API...."""
+
+def load_user_info((self)):
+
+def fetch_user_info((self)):
+
+def get_user_info((self)) -> bool:
+
+def request_recent_jobs((
+        self,
+        from_date: str | None = None,
+        page: int | None = None,
+        job_type: str | None = None,
+        amount: int = 50,
+    )) -> List[dict]:
+    """ Request recent jobs from the Midjourney API...."""
+
+def __init__((
+        self, api: MidjourneyAPI, archive_folder: Path, job_type: str | None = None
+    )):
+    """ The constructor for the MidjourneyJobCrawler class...."""
+
+def load_archive_data((self)):
+    """ Load the archive data...."""
+
+def update_archive_data((self, job_listing: List[dict])):
+    """ Update the archive data with the given job listing...."""
+
+def crawl((
+        self,
+        limit: int | None = None,
+        from_date: str | None = None,
+    )):
+    """ Crawl the Midjourney API for job listings...."""
+
+def __init__((self, api, archive_folder)):
+    """ The constructor for the MidjourneyDownloader class...."""
+
+def fetch_image((self, url)):
+    """ Fetch an image from the given URL...."""
+
+def read_jobs((self)):
+    """ Read the job listings...."""
+
+def save_jobs((self)):
+    """ Save the job listings...."""
+
+def create_folders((self, dt_obj)):
+    """ Create folders for the given date...."""
+
+def fetch_and_write_image((self, image_url, image_path, info)):
+    """ Fetch an image from the given URL and write it to the given path...."""
+
+def download_missing((self)):
+    """ Download missing images...."""
+
+def download((
+    archive_folder: Path | str | None = None,
+    user_id: str | None = None,
+    limit: int | None = None,
+)):
+    """ Download images from the Midjourney API...."""
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/dimjournal/_previous/setup.py
+# Language: python
+
+from setuptools import setup
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/dimjournal/_previous/test_dimjournal.py
+# Language: python
+
+import datetime as dt
+import json
+import pytest
+from dimjournal.dimjournal import Constants, get_date_ninety_days_prior
+from dimjournal.dimjournal import MidjourneyAPI
+from dimjournal.dimjournal import MidjourneyJobCrawler
+from dimjournal.dimjournal import MidjourneyDownloader
+from dimjournal.dimjournal import MidjourneyDownloader
+
+class TestMidjourneyAPI:
+    def test_log_in_success((self, mock_api, mock_driver)):
+    def test_log_in_failure_no_cookie((self, mock_api, mock_driver)):
+    def test_get_user_info_success_from_fetch((
+        self, mock_api, mock_driver, mocker, tmp_path
+    )):
+    def test_get_user_info_success_from_file((
+        self, mock_api, mock_driver, mocker, tmp_path
+    )):
+    def test_request_recent_jobs_success((self, mock_api, mock_driver, mocker)):
+    def test_request_recent_jobs_no_jobs_found((self, mock_api, mock_driver, mocker)):
+
+class TestMidjourneyJobCrawler:
+    def test_load_archive_data_file_exists((self, mock_crawler, tmp_path, mocker)):
+    def test_load_archive_data_file_not_exists((self, mock_crawler)):
+    def test_load_archive_data_json_decode_error((self, mock_crawler, tmp_path, mocker)):
+    def test_update_archive_data_new_entries((self, mock_crawler, tmp_path)):
+    def test_update_archive_data_no_new_entries((self, mock_crawler)):
+    def test_crawl_success_gathers_jobs((self, mock_crawler, mocker)):
+    def test_crawl_stops_when_no_new_data((self, mock_crawler, mocker)):
+
+class TestMidjourneyDownloader:
+    def test_read_jobs_success((self, mock_downloader)):
+    def test_read_jobs_file_not_found((self, mocker, mock_api, tmp_path)):
+    def test_create_folders((self, mock_downloader, tmp_path)):
+    def test_fetch_and_write_image_png_success((self, mock_downloader, mocker, tmp_path)):
+    def test_fetch_and_write_image_non_png((self, mock_downloader, mocker, tmp_path)):
+    def test_fetch_and_write_image_already_exists((
+        self, mock_downloader, mocker, tmp_path
+    )):
+    def test_download_missing_downloads_one_image((
+        self, mock_downloader, mocker, tmp_path
+    )):
+
+def test_get_date_ninety_days_prior(()):
+    """Test the get_date_ninety_days_prior function."""
+
+def test_get_date_ninety_days_prior_leap_year(()):
+    """Test get_date_ninety_days_prior function across a leap year."""
+
+def mock_driver((mocker)):
+
+def mock_api((mocker, mock_driver, tmp_path)):
+
+def test_log_in_success((self, mock_api, mock_driver)):
+
+def test_log_in_failure_no_cookie((self, mock_api, mock_driver)):
+
+def test_get_user_info_success_from_fetch((
+        self, mock_api, mock_driver, mocker, tmp_path
+    )):
+
+def test_get_user_info_success_from_file((
+        self, mock_api, mock_driver, mocker, tmp_path
+    )):
+
+def test_request_recent_jobs_success((self, mock_api, mock_driver, mocker)):
+
+def test_request_recent_jobs_no_jobs_found((self, mock_api, mock_driver, mocker)):
+
+def mock_crawler((mocker, mock_api, tmp_path)):
+
+def test_load_archive_data_file_exists((self, mock_crawler, tmp_path, mocker)):
+
+def test_load_archive_data_file_not_exists((self, mock_crawler)):
+
+def test_load_archive_data_json_decode_error((self, mock_crawler, tmp_path, mocker)):
+
+def test_update_archive_data_new_entries((self, mock_crawler, tmp_path)):
+
+def test_update_archive_data_no_new_entries((self, mock_crawler)):
+
+def test_crawl_success_gathers_jobs((self, mock_crawler, mocker)):
+
+def test_crawl_stops_when_no_new_data((self, mock_crawler, mocker)):
+
+def mock_downloader((mocker, mock_api, tmp_path)):
+
+def test_read_jobs_success((self, mock_downloader)):
+
+def test_read_jobs_file_not_found((self, mocker, mock_api, tmp_path)):
+
+def test_create_folders((self, mock_downloader, tmp_path)):
+
+def test_fetch_and_write_image_png_success((self, mock_downloader, mocker, tmp_path)):
+
+def test_fetch_and_write_image_non_png((self, mock_downloader, mocker, tmp_path)):
+
+def test_fetch_and_write_image_already_exists((
+        self, mock_downloader, mocker, tmp_path
+    )):
+
+def test_download_missing_downloads_one_image((
+        self, mock_downloader, mocker, tmp_path
+    )):
+
+def side_effect_faw((img_url, img_path, info_dict)):
+
+
+<document index="18">
+<source>pyproject.toml</source>
+<document_content>
+# this_file: pyproject.toml
 [build-system]
 # AVOID CHANGING REQUIRES: IT WILL BE UPDATED BY PYSCAFFOLD!
 requires = ["setuptools>=46.1.0", "setuptools_scm[toml]>=5"]
@@ -1089,76 +2653,214 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools_scm]
 # For smarter version schemes and other configuration options,
 # check out https://github.com/pypa/setuptools_scm
-version_scheme = "no-guess-dev"
-</file>
+version_scheme = "release-branch-semver"
+local_scheme = "no-local-version"
+write_to = "src/dimjournal/_version.py"
+write_to_template = """\
+# this_file: src/dimjournal/_version.py
+# Version file generated by setuptools_scm
+__version__ = "{version}"
+"""
 
-<file path="README.md">
-# Dimjournal
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
 
-Dimjournal is a Midjourney backup tool. It automatically downloads the metadata archive and the upscaled images from Midjourney into a local archive (folder tree). It also embeds some basic metadata (like the prompt) into the PNG files.
+[tool.isort]
+profile = "black"
+line_length = 88
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+src_paths = ["src", "tests", "scripts"]
 
-_Note: the terms of use of Midjourney disallow any automation._
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--tb=short",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=dimjournal",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "--cov-fail-under=80"
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests"
+]
 
-Dimjournal is a Python tool uses the Selenium WebDriver to log into the Midjourney website, fetch user data, and download job information and images.
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/conftest.py",
+    "*/setup.py",
+    "*/__main__.py"
+]
 
-## Changelog
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\(Protocol\\):",
+    "@(abc\\.)?abstractmethod"
+]
 
-- v1.0.8: Fixes
-- v1.0.3: Tested on macOS in July 2023
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101"]  # Skip assert_used test
+</document_content>
+</document>
 
-## Installation
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/scripts/build.py
+# Language: python
 
-Stable version:
+import subprocess
+import sys
+import logging
+from pathlib import Path
+import shutil
+import PyInstaller
+import os
 
-```
-pip install dimjournal
-```
+def run_command((cmd, check=True, cwd=None)):
+    """Run a command and return the result."""
 
-Development version:
+def clean_build(()):
+    """Clean previous build artifacts."""
 
-```
-python3 -m pip install git+https://github.com/twardoch/dimjournal
-```
+def install_dependencies(()):
+    """Install build dependencies."""
 
-## Usage
+def build_package(()):
+    """Build the package."""
 
-### Command Line Interface (CLI)
+def build_binary(()):
+    """Build standalone binary using PyInstaller."""
 
-In Terminal, run:
+def main(()):
+    """Main build function."""
 
-```bash
-dimjournal
-```
 
-Dimjournal will open a browser where you need to log into MidJourney. The tool will create the backup folder, which by default is the `midjourney/dimjournal` subfolder inside your `Pictures`/`My Pictures` folder. It will operate the browser, download all metadata (up to 2,500 last upscale jobs, and up to 2,500 jobs), and save it in JSON files in the backup folder. Then it will use the browser to download all upscales that are not in the backup folder. If you run the tool again, it will only download new metadata, and new images.
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/scripts/release.py
+# Language: python
 
-To specify a different backup folder, use:
+import subprocess
+import sys
+import logging
+from pathlib import Path
+import os
+import re
+from datetime import datetime
 
-```bash
-python3 -m dimjournal --archive_folder /path/to/your/archive/folder
-```
+def run_command((cmd, check=True, cwd=None)):
+    """Run a command and return the result."""
 
-### Python
+def get_current_version(()):
+    """Get current version from git tags."""
 
-You can also use Dimjournal in your Python scripts. Here is an example of how to import and use the `download` function:
+def validate_version((version)):
+    """Validate version format."""
 
-```python
-from dimjournal import download
+def check_working_directory(()):
+    """Check if working directory is clean."""
 
-# Specify the directory where you want to store the data
-archive_folder = "/path/to/your/archive/folder"
+def run_tests(()):
+    """Run the test suite."""
 
-# Download the data
-download(archive_folder)
-```
+def build_package(()):
+    """Build the package."""
 
-## License
+def create_git_tag((version)):
+    """Create and push git tag."""
 
-- Licensed under the [Apache-2.0 License](./LICENSE.txt)
-- Written with assistance from ChatGPT
-</file>
+def update_changelog((version)):
+    """Update changelog with new version."""
 
-<file path="setup.cfg">
+def main(()):
+    """Main release function."""
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/scripts/test.py
+# Language: python
+
+import subprocess
+import sys
+import logging
+from pathlib import Path
+import os
+
+def run_command((cmd, check=True, cwd=None)):
+    """Run a command and return the result."""
+
+def install_test_dependencies(()):
+    """Install testing dependencies."""
+
+def run_linting(()):
+    """Run code linting."""
+
+def run_tests(()):
+    """Run the test suite."""
+
+def format_code(()):
+    """Format code using black and isort."""
+
+def main(()):
+    """Main test function."""
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/scripts/validate.py
+# Language: python
+
+import sys
+import os
+import subprocess
+from pathlib import Path
+
+def check_file_exists((file_path, description)):
+    """Check if a file exists and report."""
+
+def check_python_syntax((file_path)):
+    """Check Python syntax of a file."""
+
+def main(()):
+    """Main validation function."""
+
+
+<document index="19">
+<source>setup.cfg</source>
+<document_content>
 [metadata]
 name = dimjournal
 description = Archive utility for Midjourney
@@ -1211,6 +2913,27 @@ testing =
     setuptools
     pytest
     pytest-cov
+    pytest-mock
+    black
+    isort
+    flake8
+    bandit
+    safety
+dev =
+    setuptools
+    pytest
+    pytest-cov
+    pytest-mock
+    black
+    isort
+    flake8
+    bandit
+    safety
+    build
+    setuptools_scm
+    wheel
+    PyInstaller
+    pydoc-markdown
 
 [options.entry_points]
 console_scripts =
@@ -1246,33 +2969,375 @@ extensions =
     github_actions
     markdown
     pre_commit
-</file>
 
-<file path="setup.py">
-"""
-    Setup file for dimjournal.
-    Use setup.cfg to configure your project.
+</document_content>
+</document>
 
-    This file was generated with PyScaffold 4.4.1.
-    PyScaffold helps you to put up the scaffold of your new Python project.
-    Learn more under: https://pyscaffold.org/
-"""
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/setup.py
+# Language: python
+
 from setuptools import setup
 
-if __name__ == "__main__":
-    try:
-        setup(use_scm_version={"version_scheme": "no-guess-dev"})
-    except:  # noqa
-        print(
-            "\n\nAn error occurred while building the project, "
-            "please ensure you have the most updated version of setuptools, "
-            "setuptools_scm and wheel with:\n"
-            "   pip install -U setuptools setuptools_scm wheel\n\n"
-        )
-        raise
-</file>
 
-<file path="tox.ini">
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/src/dimjournal/__init__.py
+# Language: python
+
+import sys
+from .dimjournal import download
+from ._version import __version__
+from importlib.metadata import version, PackageNotFoundError
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/src/dimjournal/__main__.py
+# Language: python
+
+import fire
+from .dimjournal import download
+
+def cli(()):
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/src/dimjournal/dimjournal.py
+# Language: python
+
+import base64
+import datetime as dt
+import io
+import itertools
+import json
+import logging
+import pickle
+from pathlib import Path
+from urllib.parse import urlparse
+import numpy as np
+import pymtpng
+import undetected_chromedriver as webdriver
+from bs4 import BeautifulSoup
+from PIL import Image
+from selenium.common.exceptions import InvalidCookieDomainException, TimeoutException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from slugify import slugify
+from tqdm import tqdm
+import os
+
+class Constants:
+    """ A class to hold various constant values used throughout the Dimjournal application...."""
+
+class MidjourneyAPI:
+    """ A class to interact with the Midjourney API...."""
+    def __init__((self, driver: webdriver.Chrome, archive_folder: Path | str)) -> None:
+        """ The constructor for the MidjourneyAPI class...."""
+    def load_cookies((self)) -> None:
+        """ Loads cookies from a pickle file and adds them to the WebDriver...."""
+    def save_cookies((self)) -> None:
+        """ Saves the current WebDriver cookies to a pickle file...."""
+    def log_in((self)) -> bool:
+        """ Log in to the Midjourney API...."""
+    def load_user_info((self)) -> None:
+        """ Loads user information from a local JSON file if it exists,..."""
+    def fetch_user_info((self)) -> dict | None:
+        """ Navigates to the Midjourney account page and extracts user information..."""
+    def get_user_info((self)) -> bool:
+        """ Retrieves the user ID from the loaded user information...."""
+    def request_recent_jobs((
+        self,
+        from_date: str | None = None,
+        page: int | None = None,
+        job_type: str | None = None,
+        amount: int = 50,
+    )) -> list[dict]:
+        """ Request recent jobs from the Midjourney API...."""
+
+class MidjourneyJobCrawler:
+    def __init__((
+        self, api: MidjourneyAPI, archive_folder: Path, job_type: str | None = None
+    )):
+        """ The constructor for the MidjourneyJobCrawler class...."""
+    def load_archive_data((self)):
+        """ Load the archive data...."""
+    def update_archive_data((self, job_listing: list[dict])):
+        """ Update the archive data with the given job listing...."""
+    def crawl((
+        self,
+        limit: int | None = None,
+        from_date: str | None = None,
+    )):
+        """ Crawl the Midjourney API for job listings...."""
+
+class MidjourneyDownloader:
+    def __init__((self, api, archive_folder)):
+        """ The constructor for the MidjourneyDownloader class...."""
+    def fetch_image((self, url)):
+        """ Fetch an image from the given URL...."""
+    def read_jobs((self)):
+        """ Read the job listings...."""
+    def save_jobs((self)):
+        """ Save the job listings...."""
+    def create_folders((self, dt_obj)):
+        """ Create folders for the given date...."""
+    def fetch_and_write_image((self, image_url, image_path, info)):
+        """ Fetch an image from the given URL and write it to the given path...."""
+    def download_missing((self)):
+        """ Download missing images...."""
+
+def get_date_ninety_days_prior((date_string: str)) -> str:
+    """ Get the date 90 days prior to the given date...."""
+
+def __init__((self, driver: webdriver.Chrome, archive_folder: Path | str)) -> None:
+    """ The constructor for the MidjourneyAPI class...."""
+
+def load_cookies((self)) -> None:
+    """ Loads cookies from a pickle file and adds them to the WebDriver...."""
+
+def save_cookies((self)) -> None:
+    """ Saves the current WebDriver cookies to a pickle file...."""
+
+def log_in((self)) -> bool:
+    """ Log in to the Midjourney API...."""
+
+def load_user_info((self)) -> None:
+    """ Loads user information from a local JSON file if it exists,..."""
+
+def fetch_user_info((self)) -> dict | None:
+    """ Navigates to the Midjourney account page and extracts user information..."""
+
+def get_user_info((self)) -> bool:
+    """ Retrieves the user ID from the loaded user information...."""
+
+def request_recent_jobs((
+        self,
+        from_date: str | None = None,
+        page: int | None = None,
+        job_type: str | None = None,
+        amount: int = 50,
+    )) -> list[dict]:
+    """ Request recent jobs from the Midjourney API...."""
+
+def __init__((
+        self, api: MidjourneyAPI, archive_folder: Path, job_type: str | None = None
+    )):
+    """ The constructor for the MidjourneyJobCrawler class...."""
+
+def load_archive_data((self)):
+    """ Load the archive data...."""
+
+def update_archive_data((self, job_listing: list[dict])):
+    """ Update the archive data with the given job listing...."""
+
+def crawl((
+        self,
+        limit: int | None = None,
+        from_date: str | None = None,
+    )):
+    """ Crawl the Midjourney API for job listings...."""
+
+def __init__((self, api, archive_folder)):
+    """ The constructor for the MidjourneyDownloader class...."""
+
+def fetch_image((self, url)):
+    """ Fetch an image from the given URL...."""
+
+def read_jobs((self)):
+    """ Read the job listings...."""
+
+def save_jobs((self)):
+    """ Save the job listings...."""
+
+def create_folders((self, dt_obj)):
+    """ Create folders for the given date...."""
+
+def fetch_and_write_image((self, image_url, image_path, info)):
+    """ Fetch an image from the given URL and write it to the given path...."""
+
+def download_missing((self)):
+    """ Download missing images...."""
+
+def download((
+    archive_folder: Path | str | None = None,
+    user_id: str | None = None,
+    limit: int | None = None,
+)):
+    """ Download images from the Midjourney API...."""
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/tests/conftest.py
+# Language: python
+
+
+
+# File: /Users/adam/Developer/vcs/github.twardoch/pub/dimjournal/tests/test_dimjournal.py
+# Language: python
+
+import pytest
+import json
+import pickle
+from pathlib import Path
+from unittest.mock import Mock, patch, MagicMock
+import datetime as dt
+from tempfile import TemporaryDirectory
+from dimjournal.dimjournal import (
+    get_date_ninety_days_prior,
+    Constants,
+    MidjourneyAPI,
+    MidjourneyJobCrawler,
+    MidjourneyDownloader,
+    download
+)
+from dimjournal import download
+from dimjournal import __version__
+from dimjournal.__main__ import cli
+
+class TestUtilityFunctions:
+    """Test utility functions."""
+    def test_get_date_ninety_days_prior((self)):
+        """Test get_date_ninety_days_prior function."""
+    def test_get_date_ninety_days_prior_leap_year((self)):
+        """Test get_date_ninety_days_prior with leap year."""
+
+class TestConstants:
+    """Test Constants class."""
+    def test_constants_values((self)):
+        """Test that constants have expected values."""
+
+class TestMidjourneyAPI:
+    """Test MidjourneyAPI class."""
+
+class TestMidjourneyJobCrawler:
+    """Test MidjourneyJobCrawler class."""
+    def test_init((self, mock_api, temp_archive)):
+        """Test MidjourneyJobCrawler initialization."""
+    def test_load_archive_data_file_exists((self, mock_api, temp_archive)):
+        """Test loading archive data when file exists."""
+    def test_load_archive_data_file_not_exists((self, mock_api, temp_archive)):
+        """Test loading archive data when file doesn't exist."""
+    def test_update_archive_data((self, mock_api, temp_archive)):
+        """Test updating archive data."""
+    def test_crawl_with_limit((self, mock_api, temp_archive)):
+        """Test crawling with limit."""
+
+class TestMidjourneyDownloader:
+    """Test MidjourneyDownloader class."""
+    def test_init((self, mock_api, temp_archive)):
+        """Test MidjourneyDownloader initialization."""
+    def test_create_folders((self, mock_api, temp_archive)):
+        """Test folder creation."""
+    def test_generate_image_path((self, mock_api, temp_archive)):
+        """Test image path generation."""
+
+class TestDownloadFunction:
+    """Test the main download function."""
+
+class TestIntegration:
+    """Integration tests."""
+    def test_package_imports((self)):
+        """Test that package imports work correctly."""
+    def test_cli_entry_point((self)):
+        """Test CLI entry point exists."""
+
+class TestErrorHandling:
+    """Test error handling scenarios."""
+    def test_invalid_date_format((self)):
+        """Test handling of invalid date format."""
+    def test_missing_archive_folder((self)):
+        """Test handling of missing archive folder."""
+
+def test_get_date_ninety_days_prior((self)):
+    """Test get_date_ninety_days_prior function."""
+
+def test_get_date_ninety_days_prior_leap_year((self)):
+    """Test get_date_ninety_days_prior with leap year."""
+
+def test_constants_values((self)):
+    """Test that constants have expected values."""
+
+def mock_driver((self)):
+    """Create a mock Chrome driver."""
+
+def temp_archive((self)):
+    """Create a temporary archive directory."""
+
+def test_init((self, mock_get_user_info, mock_log_in, mock_driver, temp_archive)):
+    """Test MidjourneyAPI initialization."""
+
+def test_load_cookies_file_exists((self, mock_get_user_info, mock_log_in, mock_driver, temp_archive)):
+    """Test loading cookies when file exists."""
+
+def test_load_cookies_file_not_exists((self, mock_get_user_info, mock_log_in, mock_driver, temp_archive)):
+    """Test loading cookies when file doesn't exist."""
+
+def test_save_cookies((self, mock_get_user_info, mock_log_in, mock_driver, temp_archive)):
+    """Test saving cookies."""
+
+def mock_api((self)):
+    """Create a mock MidjourneyAPI."""
+
+def temp_archive((self)):
+    """Create a temporary archive directory."""
+
+def test_init((self, mock_api, temp_archive)):
+    """Test MidjourneyJobCrawler initialization."""
+
+def test_load_archive_data_file_exists((self, mock_api, temp_archive)):
+    """Test loading archive data when file exists."""
+
+def test_load_archive_data_file_not_exists((self, mock_api, temp_archive)):
+    """Test loading archive data when file doesn't exist."""
+
+def test_update_archive_data((self, mock_api, temp_archive)):
+    """Test updating archive data."""
+
+def test_crawl_with_limit((self, mock_api, temp_archive)):
+    """Test crawling with limit."""
+
+def mock_api((self)):
+    """Create a mock MidjourneyAPI."""
+
+def temp_archive((self)):
+    """Create a temporary archive directory."""
+
+def test_init((self, mock_api, temp_archive)):
+    """Test MidjourneyDownloader initialization."""
+
+def test_create_folders((self, mock_api, temp_archive)):
+    """Test folder creation."""
+
+def test_generate_image_path((self, mock_api, temp_archive)):
+    """Test image path generation."""
+
+def test_download_missing_images((self, mock_fetch_write, mock_api, temp_archive)):
+    """Test downloading missing images."""
+
+def test_download_function_success((self, mock_downloader_class, mock_crawler_class, 
+                                     mock_api_class, mock_driver_class, tmp_path)):
+    """Test successful download function execution."""
+
+def test_download_function_with_exception((self, mock_driver_class, tmp_path)):
+    """Test download function with exception handling."""
+
+def test_package_imports((self)):
+    """Test that package imports work correctly."""
+
+def test_cli_entry_point((self)):
+    """Test CLI entry point exists."""
+
+def sample_job_data(()):
+    """Sample job data for tests."""
+
+def sample_jobs_list(()):
+    """Sample jobs list for tests."""
+
+def test_invalid_date_format((self)):
+    """Test handling of invalid date format."""
+
+def test_missing_archive_folder((self)):
+    """Test handling of missing archive folder."""
+
+
+<document index="20">
+<source>tox.ini</source>
+<document_content>
 # Tox configuration file
 # Read more under https://tox.wiki/
 # THIS SCRIPT IS SUPPOSED TO BE AN EXAMPLE. MODIFY IT ACCORDING TO YOUR NEEDS!
@@ -1366,6 +3431,8 @@ deps = twine
 commands =
     python -m twine check dist/*
     python -m twine upload {posargs:--repository {env:TWINE_REPOSITORY:testpypi}} dist/*
-</file>
 
-</files>
+</document_content>
+</document>
+
+</documents>
