@@ -12,6 +12,10 @@ from urllib.parse import urlparse
 
 import numpy as np
 import pymtpng
+
+# undetected_chromedriver patches Selenium's ChromeDriver to evade the bot
+# detection (Cloudflare / anti-automation) that Midjourney's web app applies; a
+# vanilla selenium.webdriver.Chrome is flagged and blocked before login.
 import undetected_chromedriver as webdriver
 from bs4 import BeautifulSoup
 from PIL import Image
@@ -32,6 +36,7 @@ class Constants:
     These constants include URLs for Midjourney services, element IDs for web scraping,
     file names for data storage, and JavaScript snippets for browser automation.
     """
+
     date_format: str = "%Y-%m-%d %H:%M:%S.%f"
     home_url: str = "https://www.midjourney.com/home/"
     app_url: str = "https://www.midjourney.com/app/"
@@ -89,6 +94,7 @@ class MidjourneyAPI:
         """
         self.archive_folder = Path(archive_folder)
         self.driver = driver
+        self.cookies_path: Path = self.archive_folder / Constants.cookies_pkl
         self.log_in()
         self.get_user_info()
 
@@ -97,23 +103,27 @@ class MidjourneyAPI:
         Loads cookies from a pickle file and adds them to the WebDriver.
         Cookies are used to maintain the user's session with Midjourney.
         """
-        self.cookies_path: Path = Path(self.archive_folder, Constants.cookies_pkl)
         if self.cookies_path.is_file():
             try:
-                cookies: list[dict] = pickle.load(open(self.cookies_path, "rb"))
+                with open(self.cookies_path, "rb") as fh:
+                    cookies: list[dict] = pickle.load(fh)
                 for cookie in cookies:
                     try:
                         # Attempt to add each cookie to the driver
                         self.driver.add_cookie(cookie)
                     except InvalidCookieDomainException:
-                        # This exception can occur if the cookie's domain is not valid for the current URL.
-                        # It's often safe to ignore for session cookies that will be valid once the correct domain is navigated to.
+                        # The cookie's domain may not match the current URL; this is
+                        # safe to skip for session cookies that become valid once the
+                        # correct domain is navigated to.
                         _log.debug(f"Invalid cookie domain for cookie: {cookie.get('name')}")
-                        pass
             except Exception as e:
-                _log.error(f"Error loading cookies from {self.cookies_path}: {str(e)}", exc_info=True)
+                _log.error(
+                    f"Error loading cookies from {self.cookies_path}: {str(e)}", exc_info=True
+                )
         else:
-            _log.info(f"No cookies file found at {self.cookies_path}. A fresh login may be required.")
+            _log.info(
+                f"No cookies file found at {self.cookies_path}. A fresh login may be required."
+            )
 
     def save_cookies(self) -> None:
         """
@@ -121,7 +131,8 @@ class MidjourneyAPI:
         This preserves the session for future runs, avoiding repeated manual logins.
         """
         try:
-            pickle.dump(self.driver.get_cookies(), open(self.cookies_path, "wb"))
+            with open(self.cookies_path, "wb") as fh:
+                pickle.dump(self.driver.get_cookies(), fh)
             _log.info(f"Cookies saved to {self.cookies_path}")
         except Exception as e:
             _log.error(f"Error saving cookies to {self.cookies_path}: {str(e)}", exc_info=True)
@@ -176,7 +187,7 @@ class MidjourneyAPI:
                     "Attempting to re-fetch.",
                     exc_info=True,
                 )
-                self.user_info = self.fetch_user_info()
+                self.user_info = self.fetch_user_info() or {}
                 if self.user_info:
                     self.user_json.write_text(json.dumps(self.user_info, indent=2))
                     _log.info(f"Saved newly fetched user info to {self.user_json}")
@@ -187,12 +198,12 @@ class MidjourneyAPI:
                 )
         else:
             _log.info(f"User info file not found at {self.user_json}. Fetching new data.")
-            self.user_info = self.fetch_user_info()
+            self.user_info = self.fetch_user_info() or {}
             if self.user_info:
                 try:
                     self.user_json.write_text(json.dumps(self.user_info, indent=2))
                     _log.info(f"Saved newly fetched user info to {self.user_json}")
-                except IOError as e:
+                except OSError as e:
                     _log.error(
                         f"Error writing user info to {self.user_json}: {str(e)}",
                         exc_info=True,
@@ -218,15 +229,12 @@ class MidjourneyAPI:
             WebDriverWait(self.driver, 60 * 10).until(
                 EC.presence_of_element_located((By.ID, Constants.account_element_id))
             )
-            _log.info(
-                f"Account page loaded, element {Constants.account_element_id} found."
-            )
+            _log.info(f"Account page loaded, element {Constants.account_element_id} found.")
             soup = BeautifulSoup(self.driver.page_source, "html.parser")
             script_tag = soup.find("script", id=Constants.account_element_id)
             if not script_tag:
                 _log.error(
-                    f"Script tag ID {Constants.account_element_id} not found "
-                    "on account page."
+                    f"Script tag ID {Constants.account_element_id} not found on account page."
                 )
                 return None
             script_tag_contents = script_tag.text
@@ -234,9 +242,7 @@ class MidjourneyAPI:
             _log.info("Successfully fetched and parsed user info.")
             return user_data
         except TimeoutException:
-            _log.error(
-                f"Timeout waiting for account page elements: {Constants.account_url}"
-            )
+            _log.error(f"Timeout waiting for account page elements: {Constants.account_url}")
             return None
         except json.JSONDecodeError as e:
             _log.error(
@@ -298,7 +304,7 @@ class MidjourneyAPI:
             List[dict]: A list of jobs.
         """
         try:
-            params = {}
+            params: dict[str, object] = {}
             if from_date:
                 pass  # params["fromDate"] = prev_day(from_date)
             if page:
@@ -318,8 +324,11 @@ class MidjourneyAPI:
             _log.debug(f"Requesting {url}")
             self.driver.get(url)
             soup = BeautifulSoup(self.driver.page_source, "html.parser")
-            pre_tag_contents = soup.find("pre").text
-            job_listing = json.loads(pre_tag_contents)
+            pre_tag = soup.find("pre")
+            if pre_tag is None:
+                _log.error("No <pre> JSON payload found in Midjourney response")
+                return []
+            job_listing = json.loads(pre_tag.text)
 
             if isinstance(job_listing, list):
                 if len(job_listing) > 0 and isinstance(job_listing[0], dict):
@@ -344,9 +353,7 @@ class MidjourneyAPI:
                 )
                 raise ValueError(f"Unexpected job listing format: {job_listing}")
         except json.JSONDecodeError as e:
-            content_snippet = (
-                pre_tag_contents[:500] if "pre_tag_contents" in locals() else "N/A"
-            )
+            content_snippet = pre_tag.text[:500] if "pre_tag" in locals() and pre_tag else "N/A"
             _log.error(
                 f"JSON decode error from API: {str(e)}. Content: {content_snippet}...",
                 exc_info=True,
@@ -356,16 +363,12 @@ class MidjourneyAPI:
             _log.error(f"Timeout requesting recent jobs from {url}", exc_info=True)
             return []
         except Exception as e:
-            _log.error(
-                f"Unexpected error requesting recent jobs: {str(e)}", exc_info=True
-            )
+            _log.error(f"Unexpected error requesting recent jobs: {str(e)}", exc_info=True)
             return []
 
 
 class MidjourneyJobCrawler:
-    def __init__(
-        self, api: MidjourneyAPI, archive_folder: Path, job_type: str | None = None
-    ):
+    def __init__(self, api: MidjourneyAPI, archive_folder: Path, job_type: str | None = None):
         """
         The constructor for the MidjourneyJobCrawler class.
 
@@ -382,7 +385,7 @@ class MidjourneyJobCrawler:
         else:
             self.archive_file = Path("jobs.json")
         self.archive_file = self.archive_folder / self.archive_file
-        self.archive_data = []
+        self.archive_data: list[dict] = []
 
     def load_archive_data(self):
         """
@@ -407,6 +410,7 @@ class MidjourneyJobCrawler:
                 exc_info=True,
             )
             self.archive_data = []
+        return self.archive_data
 
     def update_archive_data(self, job_listing: list[dict]):
         """
@@ -419,21 +423,15 @@ class MidjourneyJobCrawler:
             bool: True if the archive data was updated, False otherwise.
         """
         new_entries = [
-            job
-            for job in job_listing
-            if job["id"] not in [x["id"] for x in self.archive_data]
+            job for job in job_listing if job["id"] not in [x["id"] for x in self.archive_data]
         ]
         if new_entries:
             self.archive_data.extend(new_entries)
             try:
                 self.archive_file.write_text(json.dumps(self.archive_data, indent=2))
-                _log.info(
-                    f"Updated {self.archive_file} with {len(new_entries)} new entries."
-                )
-            except IOError as e:
-                _log.error(
-                    f"Failed to write to {self.archive_file}: {str(e)}", exc_info=True
-                )
+                _log.info(f"Updated {self.archive_file} with {len(new_entries)} new entries.")
+            except OSError as e:
+                _log.error(f"Failed to write to {self.archive_file}: {str(e)}", exc_info=True)
                 return False  # IO error during save
         else:
             _log.debug("No new entries to add to the archive.")
@@ -509,9 +507,7 @@ class MidjourneyDownloader:
             _log.debug(f"Fetching image from URL: {url}")
             self.api.driver.get(url)
             # Consider adding WebDriverWait for an element if image loading is slow
-            data_uri = self.api.driver.execute_async_script(
-                Constants.mj_download_image_js
-            )
+            data_uri = self.api.driver.execute_async_script(Constants.mj_download_image_js)
             if not data_uri or "," not in data_uri:
                 _log.error(f"Invalid data URI from JS for {url}. Received: {data_uri}")
                 return None, None
@@ -524,20 +520,47 @@ class MidjourneyDownloader:
             _log.error(f"Timeout fetching image from {url}", exc_info=True)
             return None, None
         except Exception as e:
-            _log.error(
-                f"Unexpected error fetching image from {url}: {e!s}", exc_info=True
-            )
+            _log.error(f"Unexpected error fetching image from {url}: {e!s}", exc_info=True)
             return None, None
 
-    def read_jobs(self):
+    def read_jobs(self) -> list[dict]:
         """
-        Read the job listings.
+        Read the job listings from the JSON file.
 
         Returns:
-            List[dict]: The job listings.
+            List[dict]: The job listings, or an empty list if the file does not exist.
         """
-        with open(self.jobs_json_path) as file:
-            return json.load(file)
+        if not self.jobs_json_path.is_file():
+            _log.info(f"Jobs file not found at {self.jobs_json_path}. Starting fresh.")
+            return []
+        try:
+            with open(self.jobs_json_path) as file:
+                return json.load(file)
+        except (json.JSONDecodeError, OSError) as e:
+            _log.error(f"Error reading {self.jobs_json_path}: {e}", exc_info=True)
+            return []
+
+    def generate_image_path(self, job_data: dict) -> Path:
+        """
+        Generate the local file path for a job's image.
+
+        Args:
+            job_data (dict): The job metadata dict, must contain 'id' and 'enqueue_time'.
+
+        Returns:
+            Path: The destination path for the image file.
+        """
+        dt_obj = dt.datetime.strptime(job_data["enqueue_time"], Constants.date_format)
+        path_month = self.create_folders(dt_obj)
+        dt_stamp = dt_obj.strftime("%Y%m%d-%H%M")
+        prompt = job_data.get("prompt", "") or job_data.get("full_command", "") or ""
+        prompt_slug = slugify(prompt)[:49]
+        job_data["arch_prompt_slug"] = prompt_slug
+        path_base = f"{dt_stamp}_{prompt_slug}_{job_data['id'][:4]}"
+        image_urls = job_data.get("image_paths", [])
+        path_ext = Path(urlparse(image_urls[0]).path).suffix[1:] if image_urls else ""
+        path_ext = path_ext or "png"
+        return path_month / f"{path_base}.{path_ext}"
 
     def save_jobs(self):
         """
@@ -548,7 +571,7 @@ class MidjourneyDownloader:
             with open(self.jobs_json_path, "w") as file:
                 json.dump(self.jobs_upscale, file, indent=2)
             _log.info(f"Successfully saved jobs to {self.jobs_json_path}")
-        except IOError as e:
+        except OSError as e:
             _log.error(
                 f"Failed to write jobs to {self.jobs_json_path}: {str(e)}",
                 exc_info=True,
@@ -580,9 +603,7 @@ class MidjourneyDownloader:
             _log.debug(f"Ensured directory exists: {path_month}")
             return path_month
         except OSError as e:
-            _log.error(
-                f"Error creating directory for {dt_obj}: {str(e)}", exc_info=True
-            )
+            _log.error(f"Error creating directory for {dt_obj}: {str(e)}", exc_info=True)
             # Fallback to base archive_folder; images won't be organized by date.
             return self.archive_folder
 
@@ -610,18 +631,17 @@ class MidjourneyDownloader:
         try:
             if image_type == "png":
                 try:
+                    # Embed Midjourney metadata into the PNG via pymtpng.
                     image_array = np.array(Image.open(io.BytesIO(image_data)))
                     with open(image_path, "wb") as fh:
                         pymtpng.encode_png(image_array, fh, info=info)
-                except Exception:
-                    _log.error(f"Fishy PNG: {image_url}")
-                    with open(image_path, "wb") as fh:
-                        pymtpng.encode_png(img_array, fh, info=info)
                     _log.info(f"Saved PNG w/ metadata: {image_path}")
                 except Exception as e_png:
-                    log_msg = (  # noqa: E501
+                    # Metadata embedding failed (corrupt bytes, unusual mode,
+                    # etc.); persist the raw download so no image is lost.
+                    log_msg = (
                         f"Could not process PNG w/ pymtpng (URL: {image_url}, "
-                        f"Path: {image_path}): {str(e_png)}. "  # noqa: E501
+                        f"Path: {image_path}): {str(e_png)}. "
                         "Writing raw bytes instead."
                     )
                     _log.warning(log_msg, exc_info=True)
@@ -633,7 +653,7 @@ class MidjourneyDownloader:
                     fh.write(image_data)
                 _log.info(f"Saved {image_type.upper()} image: {image_path}")
             return True
-        except IOError as e_io:
+        except OSError as e_io:
             _log.error(f"IOError writing to {image_path}: {str(e_io)}", exc_info=True)
             return False
         except Exception as e_general:
@@ -651,9 +671,7 @@ class MidjourneyDownloader:
             _log.info("No upscale jobs found to download.")
             return
 
-        with tqdm(
-            total=len(self.jobs_upscale), desc="Downloading missing images"
-        ) as pbar:
+        with tqdm(total=len(self.jobs_upscale), desc="Downloading missing images") as pbar:
             last_tick = 0
             for job_i, job in enumerate(self.jobs_upscale):
                 if job.get("arch", False):
@@ -665,32 +683,19 @@ class MidjourneyDownloader:
                     if not (job.get("enqueue_time") and job.get("image_paths")):
                         job_id = job.get("id", "N/A")  # noqa: E231
                         if not job.get("enqueue_time"):
-                            _log.warning(
-                                f"Skipping job {job_id} (missing enqueue_time)"
-                            )
+                            _log.warning(f"Skipping job {job_id} (missing enqueue_time)")
                         if not job.get("image_paths"):
                             _log.warning(f"Skipping job {job_id} (missing image_paths)")
                         pbar.update(1)
                         last_tick = job_i + 1
                         continue
 
-                    dt_obj = dt.datetime.strptime(
-                        job["enqueue_time"], Constants.date_format
-                    )
-                    path_month = self.create_folders(dt_obj)
-
-                    dt_stamp = dt_obj.strftime("%Y%m%d-%H%M")
-                    prompt = job.get("prompt", "") or job.get("full_command", "") or ""
                     image_url = job["image_paths"][0]
-
-                    job["arch_prompt_slug"] = slugify(prompt)[:49]
-                    path_base = f"{dt_stamp}_{job['arch_prompt_slug']}_{job['id'][:4]}"
-                    path_ext = Path(urlparse(image_url).path).suffix[1:]
-                    image_path = path_month / f"{path_base}.{path_ext}"
+                    image_path = self.generate_image_path(job)
                     info = {
-                        "Title": prompt,
+                        "Title": job.get("prompt", ""),
                         "Author": job.get("username", "Unknown"),
-                        "Description": job.get("full_command", prompt),
+                        "Description": job.get("full_command", job.get("prompt", "")),
                         "Copyright": job.get("username", "Unknown"),
                         "Creation Time": job.get("enqueue_time", ""),
                         "Software": "Midjourney via Dimjournal",
@@ -698,23 +703,17 @@ class MidjourneyDownloader:
 
                     if self.fetch_and_write_image(image_url, image_path, info):
                         job["arch"] = True
-                        job["arch_image_path"] = str(
-                            image_path.relative_to(self.archive_folder)
-                        )
+                        job["arch_image_path"] = str(image_path.relative_to(self.archive_folder))
                         _log.info(f"Archived: {job['arch_image_path']}")
                         pbar.set_description_str(
                             f"Archived: {job['arch_image_path']}", refresh=True
                         )
                     else:
                         job_id = job.get("id", "N/A")
-                        _log.warning(
-                            f"Failed to archive for job {job_id} from {image_url}"
-                        )
+                        _log.warning(f"Failed to archive for job {job_id} from {image_url}")
                         pbar.set_description_str(f"Failed: {job_id}", refresh=True)
 
-                except (
-                    dt.datetime.strptime
-                ) as e_date:  # Python 3.10 specific type hint for strptime
+                except ValueError as e_date:
                     job_id = job.get("id", "N/A")
                     time_str = job.get("enqueue_time", "")
                     _log.error(
@@ -723,9 +722,7 @@ class MidjourneyDownloader:
                     )
                 except KeyError as e_key:
                     job_id = job.get("id", "N/A")
-                    _log.error(
-                        f"Missing key in job data for {job_id}: {e_key}", exc_info=True
-                    )
+                    _log.error(f"Missing key in job data for {job_id}: {e_key}", exc_info=True)
                 except Exception as e_loop:
                     job_id = job.get("id", "N/A")
                     _log.error(
@@ -770,8 +767,7 @@ def download(
         _log.info(f"Data will be saved in: {archive_path.resolve()}")
     except OSError as e:
         _log.error(
-            f"Could not create/access archive folder at "
-            f"{archive_path.resolve()}: {e}",
+            f"Could not create/access archive folder at {archive_path.resolve()}: {e}",
             exc_info=True,
         )
         error_message = (  # noqa: E501
@@ -795,9 +791,7 @@ def download(
         api = MidjourneyAPI(driver=driver, archive_folder=archive_path)
         if not api.session_token:
             _log.error("Midjourney login failed. Check credentials/network.")
-            print(
-                "Login to Midjourney failed. Ensure manual login works and try again."
-            )
+            print("Login to Midjourney failed. Ensure manual login works and try again.")
             return
         if not api.user_id:
             _log.error("Failed to retrieve User ID. Archiving may be incomplete.")

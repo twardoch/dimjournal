@@ -1,24 +1,24 @@
-import sys
+# this_file: src/dimjournal/__init__.py
+"""dimjournal: archive utility for Midjourney generations."""
+
+import contextlib
 
 from .dimjournal import download
 
 try:
     from ._version import __version__
 except ImportError:
-    # Fallback to importlib.metadata if _version.py doesn't exist
+    # Fallback to importlib.metadata when the hatch-vcs _version.py is absent.
     try:
-        from importlib.metadata import version, PackageNotFoundError
-        # Change here if project is renamed and does not equal the package name
-        dist_name = "dimjournal"  # Ensure this matches the package name in setup.cfg
-        __version__ = version(dist_name)
+        from importlib.metadata import PackageNotFoundError, version
+
+        __version__ = version("dimjournal")
     except PackageNotFoundError:  # pragma: no cover
-        # This typically happens if pkg is not installed (e.g., editable mode might
-        # work for imports, but not for version data).
+        # Raised when the package is not installed (e.g. a bare source checkout).
         __version__ = "unknown"
     finally:
-        # Clean up to avoid leaking version and PackageNotFoundError into the module's namespace
-        # Note: 'version' here refers to the import from importlib.metadata, not __version__
-        try:
+        # Avoid leaking the importlib helpers into the package namespace.
+        with contextlib.suppress(NameError):
             del version, PackageNotFoundError
-        except NameError:
-            pass
+
+__all__ = ["__version__", "download"]

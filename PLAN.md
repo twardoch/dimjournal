@@ -1,5 +1,7 @@
 # Dimjournal Improvement Plan
 
+> **Status (2026-07):** Packaging modernized (`hatchling` + `hatch-vcs`, legacy `setup.py`/`setup.cfg`/`tox.ini` removed), ruff + mypy clean, CI and tag-release workflows in place, MkDocs site and icon added. The syntax error and PNG-fallback bug noted below are fixed. Remaining items are the module split and feature ideas tracked in `TODO.md`.
+
 ## Executive Summary
 
 This document outlines a comprehensive plan to improve the dimjournal project, making it more stable, elegant, maintainable, and easily deployable. The analysis has identified several critical issues and opportunities for enhancement.

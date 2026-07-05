@@ -30,6 +30,9 @@ tags
 .installed.cfg
 *.egg-info
 
+# hatch-vcs generated version file
+src/dimjournal/_version.py
+
 # Unittest and coverage
 htmlcov/*
 .coverage

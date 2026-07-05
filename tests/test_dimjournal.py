@@ -2,21 +2,23 @@
 """
 Comprehensive test suite for dimjournal package.
 """
-import pytest
+
+import datetime as dt
 import json
 import pickle
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-import datetime as dt
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
+
+import pytest
 
 from dimjournal.dimjournal import (
-    get_date_ninety_days_prior,
     Constants,
     MidjourneyAPI,
-    MidjourneyJobCrawler,
     MidjourneyDownloader,
-    download
+    MidjourneyJobCrawler,
+    download,
+    get_date_ninety_days_prior,
 )
 
 
@@ -32,9 +34,10 @@ class TestUtilityFunctions:
         assert result == expected
 
     def test_get_date_ninety_days_prior_leap_year(self):
-        """Test get_date_ninety_days_prior with leap year."""
+        """Test get_date_ninety_days_prior with leap year (2024 is a leap year;
+        2024-03-01 minus 90 days = 2023-12-02 because Feb 2024 has 29 days)."""
         test_date = "2024-03-01 12:00:00.000000"
-        expected = "2023-12-01 12:00:00.000000"
+        expected = "2023-12-02 12:00:00.000000"
         result = get_date_ninety_days_prior(test_date)
         assert result == expected
 
@@ -75,8 +78,8 @@ class TestMidjourneyAPI:
         with TemporaryDirectory() as temp_dir:
             yield Path(temp_dir)
 
-    @patch('dimjournal.dimjournal.MidjourneyAPI.log_in')
-    @patch('dimjournal.dimjournal.MidjourneyAPI.get_user_info')
+    @patch("dimjournal.dimjournal.MidjourneyAPI.log_in")
+    @patch("dimjournal.dimjournal.MidjourneyAPI.get_user_info")
     def test_init(self, mock_get_user_info, mock_log_in, mock_driver, temp_archive):
         """Test MidjourneyAPI initialization."""
         api = MidjourneyAPI(mock_driver, temp_archive)
@@ -85,47 +88,51 @@ class TestMidjourneyAPI:
         mock_log_in.assert_called_once()
         mock_get_user_info.assert_called_once()
 
-    @patch('dimjournal.dimjournal.MidjourneyAPI.log_in')
-    @patch('dimjournal.dimjournal.MidjourneyAPI.get_user_info')
-    def test_load_cookies_file_exists(self, mock_get_user_info, mock_log_in, mock_driver, temp_archive):
+    @patch("dimjournal.dimjournal.MidjourneyAPI.log_in")
+    @patch("dimjournal.dimjournal.MidjourneyAPI.get_user_info")
+    def test_load_cookies_file_exists(
+        self, mock_get_user_info, mock_log_in, mock_driver, temp_archive
+    ):
         """Test loading cookies when file exists."""
         # Create a mock cookies file
         cookies_path = temp_archive / Constants.cookies_pkl
-        test_cookies = [{'name': 'test', 'value': 'value'}]
-        
-        with open(cookies_path, 'wb') as f:
+        test_cookies = [{"name": "test", "value": "value"}]
+
+        with open(cookies_path, "wb") as f:
             pickle.dump(test_cookies, f)
-        
+
         api = MidjourneyAPI(mock_driver, temp_archive)
         api.load_cookies()
-        
+
         mock_driver.add_cookie.assert_called_once_with(test_cookies[0])
 
-    @patch('dimjournal.dimjournal.MidjourneyAPI.log_in')
-    @patch('dimjournal.dimjournal.MidjourneyAPI.get_user_info')
-    def test_load_cookies_file_not_exists(self, mock_get_user_info, mock_log_in, mock_driver, temp_archive):
+    @patch("dimjournal.dimjournal.MidjourneyAPI.log_in")
+    @patch("dimjournal.dimjournal.MidjourneyAPI.get_user_info")
+    def test_load_cookies_file_not_exists(
+        self, mock_get_user_info, mock_log_in, mock_driver, temp_archive
+    ):
         """Test loading cookies when file doesn't exist."""
         api = MidjourneyAPI(mock_driver, temp_archive)
         api.load_cookies()  # Should not raise exception
         mock_driver.add_cookie.assert_not_called()
 
-    @patch('dimjournal.dimjournal.MidjourneyAPI.log_in')
-    @patch('dimjournal.dimjournal.MidjourneyAPI.get_user_info')
+    @patch("dimjournal.dimjournal.MidjourneyAPI.log_in")
+    @patch("dimjournal.dimjournal.MidjourneyAPI.get_user_info")
     def test_save_cookies(self, mock_get_user_info, mock_log_in, mock_driver, temp_archive):
         """Test saving cookies."""
-        test_cookies = [{'name': 'test', 'value': 'value'}]
+        test_cookies = [{"name": "test", "value": "value"}]
         mock_driver.get_cookies.return_value = test_cookies
-        
+
         api = MidjourneyAPI(mock_driver, temp_archive)
         api.save_cookies()
-        
+
         # Verify cookies were saved
         cookies_path = temp_archive / Constants.cookies_pkl
         assert cookies_path.exists()
-        
-        with open(cookies_path, 'rb') as f:
+
+        with open(cookies_path, "rb") as f:
             saved_cookies = pickle.load(f)
-        
+
         assert saved_cookies == test_cookies
 
 
@@ -154,50 +161,50 @@ class TestMidjourneyJobCrawler:
 
     def test_load_archive_data_file_exists(self, mock_api, temp_archive):
         """Test loading archive data when file exists."""
-        # Create test data file
+        # MidjourneyJobCrawler stores a flat list (not a dict with 'jobs' key)
         jobs_file = temp_archive / "jobs_upscale.json"
-        test_data = {"jobs": [{"id": "test1", "prompt": "test prompt"}]}
-        
-        with open(jobs_file, 'w') as f:
+        test_data = [{"id": "test1", "prompt": "test prompt"}]
+
+        with open(jobs_file, "w") as f:
             json.dump(test_data, f)
-        
+
         crawler = MidjourneyJobCrawler(mock_api, temp_archive, "upscale")
         data = crawler.load_archive_data()
-        
+
         assert data == test_data
 
     def test_load_archive_data_file_not_exists(self, mock_api, temp_archive):
         """Test loading archive data when file doesn't exist."""
         crawler = MidjourneyJobCrawler(mock_api, temp_archive, "upscale")
         data = crawler.load_archive_data()
-        
-        assert data == {"jobs": []}
+
+        assert data == []
 
     def test_update_archive_data(self, mock_api, temp_archive):
         """Test updating archive data."""
         crawler = MidjourneyJobCrawler(mock_api, temp_archive, "upscale")
-        
-        # Create initial data
-        initial_data = {"jobs": [{"id": "test1", "prompt": "test1"}]}
+
+        # archive_data is a flat list of job dicts (not wrapped in {"jobs": [...]})
+        initial_jobs = [{"id": "test1", "prompt": "test1"}]
         new_jobs = [{"id": "test2", "prompt": "test2"}]
-        
-        crawler.archive_data = initial_data
+
+        crawler.archive_data = initial_jobs
         crawler.update_archive_data(new_jobs)
-        
+
         # Verify data was updated
-        assert len(crawler.archive_data["jobs"]) == 2
-        assert crawler.archive_data["jobs"][-1]["id"] == "test2"
+        assert len(crawler.archive_data) == 2
+        assert crawler.archive_data[-1]["id"] == "test2"
 
     def test_crawl_with_limit(self, mock_api, temp_archive):
         """Test crawling with limit."""
         mock_api.request_recent_jobs.return_value = [
-            {"id": "job1", "prompt": "test1"},
-            {"id": "job2", "prompt": "test2"}
+            {"id": "job1", "prompt": "test1", "enqueue_time": "2023-12-01 12:00:00.000000"},
+            {"id": "job2", "prompt": "test2", "enqueue_time": "2023-12-01 13:00:00.000000"},
         ]
-        
+
         crawler = MidjourneyJobCrawler(mock_api, temp_archive, "upscale")
         crawler.crawl(limit=1)
-        
+
         # Should only make one API call due to limit
         assert mock_api.request_recent_jobs.call_count == 1
 
@@ -228,11 +235,11 @@ class TestMidjourneyDownloader:
     def test_create_folders(self, mock_api, temp_archive):
         """Test folder creation."""
         downloader = MidjourneyDownloader(mock_api, temp_archive)
-        
+
         # Test with a specific date
         test_date = dt.datetime(2023, 12, 1, 12, 0, 0)
         folder_path = downloader.create_folders(test_date)
-        
+
         expected_path = temp_archive / "2023" / "12"
         assert folder_path == expected_path
         assert folder_path.exists()
@@ -240,16 +247,16 @@ class TestMidjourneyDownloader:
     def test_generate_image_path(self, mock_api, temp_archive):
         """Test image path generation."""
         downloader = MidjourneyDownloader(mock_api, temp_archive)
-        
+
         # Test job data
         job_data = {
             "id": "test-job-id-123",
             "enqueue_time": "2023-12-01 12:00:00.000000",
-            "prompt": "A beautiful landscape with mountains"
+            "prompt": "A beautiful landscape with mountains",
         }
-        
+
         image_path = downloader.generate_image_path(job_data)
-        
+
         # Check path components
         assert "2023" in str(image_path)
         assert "12" in str(image_path)
@@ -258,35 +265,34 @@ class TestMidjourneyDownloader:
         assert "test" in str(image_path)  # First 4 chars of job ID
         assert image_path.suffix == ".png"
 
-    @patch('dimjournal.dimjournal.MidjourneyDownloader.fetch_and_write_image')
+    @patch("dimjournal.dimjournal.MidjourneyDownloader.fetch_and_write_image")
     def test_download_missing_images(self, mock_fetch_write, mock_api, temp_archive):
         """Test downloading missing images."""
-        # Setup mock data
-        jobs_data = {
-            "jobs": [
-                {
-                    "id": "job1",
-                    "enqueue_time": "2023-12-01 12:00:00.000000",
-                    "prompt": "test prompt 1",
-                    "image_paths": ["http://example.com/image1.png"]
-                },
-                {
-                    "id": "job2",
-                    "enqueue_time": "2023-12-01 12:00:00.000000",
-                    "prompt": "test prompt 2",
-                    "image_paths": ["http://example.com/image2.png"]
-                }
-            ]
-        }
-        
-        # Create jobs file
-        jobs_file = temp_archive / Constants.jobs_upscaled_json
-        with open(jobs_file, 'w') as f:
+        # MidjourneyDownloader reads jobs_upscale.json as a flat list (not {"jobs": [...]})
+        jobs_data = [
+            {
+                "id": "job1",
+                "enqueue_time": "2023-12-01 12:00:00.000000",
+                "prompt": "test prompt 1",
+                "image_paths": ["http://example.com/image1.png"],
+            },
+            {
+                "id": "job2",
+                "enqueue_time": "2023-12-01 12:00:00.000000",
+                "prompt": "test prompt 2",
+                "image_paths": ["http://example.com/image2.png"],
+            },
+        ]
+
+        # Create jobs file with the correct name before instantiating the downloader
+        jobs_file = temp_archive / "jobs_upscale.json"
+        with open(jobs_file, "w") as f:
             json.dump(jobs_data, f)
-        
+
+        mock_fetch_write.return_value = True
         downloader = MidjourneyDownloader(mock_api, temp_archive)
         downloader.download_missing()
-        
+
         # Should attempt to download both images
         assert mock_fetch_write.call_count == 2
 
@@ -294,52 +300,53 @@ class TestMidjourneyDownloader:
 class TestDownloadFunction:
     """Test the main download function."""
 
-    @patch('dimjournal.dimjournal.webdriver.Chrome')
-    @patch('dimjournal.dimjournal.MidjourneyAPI')
-    @patch('dimjournal.dimjournal.MidjourneyJobCrawler')
-    @patch('dimjournal.dimjournal.MidjourneyDownloader')
-    def test_download_function_success(self, mock_downloader_class, mock_crawler_class, 
-                                     mock_api_class, mock_driver_class, tmp_path):
+    @patch("dimjournal.dimjournal.webdriver.Chrome")
+    @patch("dimjournal.dimjournal.MidjourneyAPI")
+    @patch("dimjournal.dimjournal.MidjourneyJobCrawler")
+    @patch("dimjournal.dimjournal.MidjourneyDownloader")
+    def test_download_function_success(
+        self, mock_downloader_class, mock_crawler_class, mock_api_class, mock_driver_class, tmp_path
+    ):
         """Test successful download function execution."""
         # Setup mocks
         mock_driver = Mock()
         mock_driver_class.return_value = mock_driver
-        
+
         mock_api = Mock()
         mock_api_class.return_value = mock_api
-        
+
         mock_crawler = Mock()
         mock_crawler_class.return_value = mock_crawler
-        
+
         mock_downloader = Mock()
         mock_downloader_class.return_value = mock_downloader
-        
+
         # Call download function
-        result = download(archive_folder=tmp_path, limit=5)
-        
+        download(archive_folder=tmp_path, limit=5)
+
         # Verify mocks were called
         mock_driver_class.assert_called_once()
-        mock_api_class.assert_called_once_with(mock_driver, tmp_path)
+        mock_api_class.assert_called_once_with(driver=mock_driver, archive_folder=tmp_path)
         assert mock_crawler_class.call_count == 2  # Called for upscale and all jobs
         mock_downloader_class.assert_called_once_with(mock_api, tmp_path)
-        
+
         # Verify driver was quit
         mock_driver.quit.assert_called_once()
 
-    @patch('dimjournal.dimjournal.webdriver.Chrome')
+    @patch("dimjournal.dimjournal.webdriver.Chrome")
     def test_download_function_with_exception(self, mock_driver_class, tmp_path):
         """Test download function with exception handling."""
         # Setup driver mock
         mock_driver = Mock()
         mock_driver_class.return_value = mock_driver
-        
+
         # Make API initialization raise an exception
-        with patch('dimjournal.dimjournal.MidjourneyAPI') as mock_api_class:
+        with patch("dimjournal.dimjournal.MidjourneyAPI") as mock_api_class:
             mock_api_class.side_effect = Exception("Test exception")
-            
+
             # Should not raise exception, but should still quit driver
             download(archive_folder=tmp_path)
-            
+
             # Verify driver was quit even with exception
             mock_driver.quit.assert_called_once()
 
@@ -349,9 +356,8 @@ class TestIntegration:
 
     def test_package_imports(self):
         """Test that package imports work correctly."""
-        from dimjournal import download
-        from dimjournal import __version__
-        
+        from dimjournal import __version__, download
+
         # Should be able to import main functions
         assert callable(download)
         assert isinstance(__version__, str)
@@ -359,6 +365,7 @@ class TestIntegration:
     def test_cli_entry_point(self):
         """Test CLI entry point exists."""
         from dimjournal.__main__ import cli
+
         assert callable(cli)
 
 
@@ -370,7 +377,7 @@ def sample_job_data():
         "id": "test-job-id-123456",
         "enqueue_time": "2023-12-01 12:00:00.000000",
         "prompt": "A beautiful landscape with mountains and rivers",
-        "image_paths": ["http://example.com/test-image.png"]
+        "image_paths": ["http://example.com/test-image.png"],
     }
 
 
@@ -382,14 +389,14 @@ def sample_jobs_list():
             "id": "job1",
             "enqueue_time": "2023-12-01 12:00:00.000000",
             "prompt": "test prompt 1",
-            "image_paths": ["http://example.com/image1.png"]
+            "image_paths": ["http://example.com/image1.png"],
         },
         {
-            "id": "job2", 
+            "id": "job2",
             "enqueue_time": "2023-12-01 13:00:00.000000",
             "prompt": "test prompt 2",
-            "image_paths": ["http://example.com/image2.png"]
-        }
+            "image_paths": ["http://example.com/image2.png"],
+        },
     ]
 
 
@@ -404,20 +411,20 @@ class TestErrorHandling:
 
     def test_missing_archive_folder(self):
         """Test handling of missing archive folder."""
-        with patch('dimjournal.dimjournal.webdriver.Chrome') as mock_driver_class:
+        with patch("dimjournal.dimjournal.webdriver.Chrome") as mock_driver_class:
             mock_driver = Mock()
             mock_driver_class.return_value = mock_driver
-            
+
             # Should create the folder if it doesn't exist
             non_existent_path = Path("/tmp/non-existent-folder")
-            
-            with patch('dimjournal.dimjournal.MidjourneyAPI') as mock_api_class:
+
+            with patch("dimjournal.dimjournal.MidjourneyAPI") as mock_api_class:
                 mock_api = Mock()
                 mock_api_class.return_value = mock_api
-                
+
                 # Should not raise exception
                 download(archive_folder=non_existent_path)
-                
+
                 mock_driver.quit.assert_called_once()
 
 

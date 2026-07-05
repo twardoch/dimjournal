@@ -1,14 +1,9 @@
 # TODO List
 
-## Critical Issues (Immediate)
-
-- [ ] Fix syntax error in `src/dimjournal/dimjournal.py` line 149 (missing try block)
-- [ ] Run tests to verify current functionality
-- [ ] Fix any failing tests after syntax error correction
-
 ## High Priority (Next 1-2 weeks)
 
 ### Code Quality
+- [ ] Split `request_recent_jobs()` — cognitive complexity is high; extract the response-shape validation into a helper.
 - [ ] Refactor dimjournal.py into multiple modules:
   - [ ] Create `api.py` for MidjourneyAPI class
   - [ ] Create `crawler.py` for MidjourneyJobCrawler class
@@ -30,9 +25,10 @@
 ## Medium Priority (Next month)
 
 ### Type Safety
-- [ ] Add type hints to all functions and methods
+- [x] Add type hints to all functions and methods
+- [x] Configure mypy (via `pyproject.toml`)
 - [ ] Add py.typed marker file
-- [ ] Configure mypy and add to pre-commit hooks
+- [ ] Add mypy to CI and pre-commit hooks
 
 ### Configuration
 - [ ] Implement configuration file support (YAML/TOML)
@@ -78,7 +74,11 @@
 
 ## Completed Tasks
 
+- [x] 2026-07 modernization: migrated to `hatchling` + `hatch-vcs`, removed `setup.py`/`setup.cfg`/`tox.ini`
+- [x] Added ruff + mypy config; `dimjournal.py` and `__init__.py` are lint/type clean
+- [x] Fixed the broken PNG-metadata fallback (undefined `img_array`) and the `<pre>` payload guard
+- [x] Added `.github/workflows/release.yml` (tag → build → GitHub release → PyPI Trusted Publishing)
+- [x] Added `docs/assets/icon.png` and README Visual section
 - [x] Update CHANGELOG.md with recent changes
-- [x] Analyze codebase for improvement areas
 - [x] Create comprehensive improvement plan (PLAN.md)
 - [x] Create simplified TODO list (this file)
