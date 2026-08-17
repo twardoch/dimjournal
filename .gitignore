@@ -56,3 +56,6 @@ MANIFEST
 .venv*/
 .conda*/
 .python-version
+htmlcov/
+*.pyc
+__pycache__/
